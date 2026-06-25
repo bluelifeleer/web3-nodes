@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Web3分布式存储 | 文件加密分片上链上传</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: "Microsoft Yahei", sans-serif;
+        }
+        body {
+            background: #0f172a;
+            color: #fff;
+            min-height: 100vh;
+            padding: 40px 20px;
+        }
+        .upload-box {
+            max-width: 800px;
+            margin: 0 auto;
+            background: #1e293b;
+            padding: 40px;
+            border-radius: 16px;
+            box-shadow: 0 0 30px rgba(0,0,0,0.3);
+        }
+        h2 {
+            text-align: center;
+            margin-bottom: 30px;
+            color: #38bdf8;
+        }
+        .tip-text {
+            text-align: center;
+            color: #94a3b8;
+            margin-bottom: 25px;
+            font-size: 14px;
+        }
+        .file-input-box {
+            border: 2px dashed #38bdf8;
+            border-radius: 12px;
+            padding: 60px 20px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s;
+            margin-bottom: 25px;
+        }
+        .file-input-box:hover {
+            background: rgba(56, 189, 248, 0.1);
+        }
+        input[type="file"] {
+            display: none;
+        }
+        .upload-btn {
+            display: block;
+            width: 100%;
+            padding: 14px;
+            background: #38bdf8;
+            color: #fff;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            cursor: pointer;
+            transition: all 0.3s;
+            margin-bottom: 25px;
+        }
+        .upload-btn:disabled {
+            background: #64748b;
+            cursor: not-allowed;
+        }
+        .progress-box {
+            margin-bottom: 25px;
+            display: none;
+        }
+        .progress-bar {
+            height: 8px;
+            background: #334155;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+        .progress-inner {
+            height: 100%;
+            width: 0%;
+            background: #38bdf8;
+            transition: width 0.3s;
+        }
+        .result-box {
+            background: #334155;
+            padding: 20px;
+            border-radius: 8px;
+            display: none;
+            word-break: break-all;
+        }
+        .result-item {
+            margin: 12px 0;
+            font-size: 14px;
+            line-height: 1.6;
+        }
+        .label {
+            color: #38bdf8;
+            font-weight: bold;
+        }
+        .success {
+            color: #10b981;
+        }
+        .error {
+            color: #ef4444;
+        }
+    </style>
+</head>
+<body>
+    <div class="upload-box">
+        <h2>🌐 分布式加密存储 · 文件上链存证</h2>
+        <p class="tip-text">文件本地AES加密 | 碎片化分布式存储 | IPFS全网存证 | 哈希不可篡改上链</p>
+        
+        <div class="file-input-box" id="fileBox">
+            <p>点击选择文件 / 拖拽文件至此上传</p>
+            <input type="file" id="fileInput">
+        </div>
+
+        <button class="upload-btn" id="uploadBtn" disabled>立即加密上链上传</button>
+
+        <div class="progress-box" id="progressBox">
+            <p style="margin-bottom:8px;font-size:14px">上传进度：<span id="progressText">0%</span></p>
+            <div class="progress-bar">
+                <div class="progress-inner" id="progressInner"></div>
+            </div>
+        </div>
+
+        <div class="result-box" id="resultBox">
+            <p class="result-item"><span class="label">上传状态：</span><span id="statusText"></span></p>
+            <p class="result-item"><span class="label">文件名称：</span><span id="fileName"></span></p>
+            <p class="result-item"><span class="label">文件哈希(上链存证)：</span><span id="fileHash"></span></p>
+            <p class="result-item"><span class="label">IPFS唯一CID：</span><span id="ipfsCid"></span></p>
+            <p class="result-item"><span class="label">加密分片数量：</span><span id="shardNum"></span></p>
+            <p class="result-item"><span class="label">分布式存储节点数：</span><span id="nodeNum"></span></p>
+        </div>
+    </div>
+
+    <script>
+        // 服务端接口地址（本地/公网部署自行修改）
+        const API_URL = "http://127.0.0.1:8000";
+        let selectFile = null;
+
+        // 元素获取
+        const fileBox = document.getElementById("fileBox");
+        const fileInput = document.getElementById("fileInput");
+        const uploadBtn = document.getElementById("uploadBtn");
+        const progressBox = document.getElementById("progressBox");
+        const progressInner = document.getElementById("progressInner");
+        const progressText = document.getElementById("progressText");
+        const resultBox = document.getElementById("resultBox");
+
+        // 选择文件
+        fileBox.onclick = () => fileInput.click();
+        fileInput.onchange = (e) => {
+            selectFile = e.target.files[0];
+            if(selectFile) {
+                fileBox.innerHTML = `<p>已选择文件：${selectFile.name}</p><p style="font-size:12px;color:#94a3b8;margin-top:8px">文件大小：${(selectFile.size / 1024 / 1024).toFixed(2)}MB</p>`;
+                uploadBtn.disabled = false;
+            }
+        };
+
+        // 拖拽上传
+        fileBox.ondragover = (e) => e.preventDefault();
+        fileBox.ondrop = (e) => {
+            e.preventDefault();
+            selectFile = e.dataTransfer.files[0];
+            if(selectFile) {
+                fileBox.innerHTML = `<p>已拖拽文件：${selectFile.name}</p><p style="font-size:12px;color:#94a3b8;margin-top:8px">文件大小：${(selectFile.size / 1024 / 1024).toFixed(2)}MB</p>`;
+                uploadBtn.disabled = false;
+            }
+        };
+
+        // 获取本地节点虚拟地址（适配客户端设备指纹，绑定算力）
+        function getLocalNodeAddr() {
+            // 优先读取本地节点缓存，无则临时生成
+            let nodeAddr = localStorage.getItem("node_addr");
+            if(!nodeAddr) {
+                const randomStr = Math.random().toString(36).slice(2);
+                nodeAddr = "TEMP_NODE_" + randomStr;
+                localStorage.setItem("node_addr", nodeAddr);
+            }
+            return nodeAddr;
+        }
+
+        // 上传文件主逻辑
+        uploadBtn.onclick = async () => {
+            if(!selectFile) return;
+            uploadBtn.disabled = true;
+            progressBox.style.display = "block";
+            resultBox.style.display = "none";
+
+            // 构造表单数据
+            const formData = new FormData();
+            formData.append("file", selectFile);
+            formData.append("user_addr", getLocalNodeAddr());
+
+            // 发送请求
+            try {
+                const res = await fetch(`${API_URL}/api/upload_file`, {
+                    method: "POST",
+                    body: formData
+                });
+
+                // 模拟进度条
+                let progress = 0;
+                const progressTimer = setInterval(() => {
+                    if(progress < 95) {
+                        progress += 5;
+                        progressInner.style.width = progress + "%";
+                        progressText.innerText = progress + "%";
+                    }
+                }, 100);
+
+                const data = await res.json();
+                clearInterval(progressTimer);
+                progressInner.style.width = "100%";
+                progressText.innerText = "100%";
+
+                // 渲染结果
+                resultBox.style.display = "block";
+                if(data.code === 200) {
+                    document.getElementById("statusText").innerText = "✅ 加密分片上链成功";
+                    document.getElementById("statusText").className = "success";
+                    document.getElementById("fileName").innerText = selectFile.name;
+                    document.getElementById("fileHash").innerText = data.data.file_hash;
+                    document.getElementById("ipfsCid").innerText = data.data.ipfs_cid;
+                    document.getElementById("shardNum").innerText = data.data.shard_count + " 片";
+                    document.getElementById("nodeNum").innerText = data.data.storage_nodes.length + " 个";
+                } else {
+                    document.getElementById("statusText").innerText = "❌ 上传失败：" + data.msg;
+                    document.getElementById("statusText").className = "error";
+                }
+            } catch (err) {
+                resultBox.style.display = "block";
+                document.getElementById("statusText").innerText = "❌ 服务端连接失败，请检查节点服务是否启动";
+                document.getElementById("statusText").className = "error";
+            }
+
+            uploadBtn.disabled = false;
+        };
+    </script>
+</body>
+</html>

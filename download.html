@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>分布式节点下载中心</title>
+    <style>
+        body{background:#111;color:#fff;text-align:center;padding-top:80px;font-size:18px;}
+        .box{max-width:500px;margin:0 auto;background:#222;padding:40px;border-radius:12px;}
+        .btn{display:block;margin:30px auto;padding:15px 30px;background:#27ae60;color:#fff;border:none;border-radius:8px;font-size:18px;text-decoration:none;}
+    </style>
+</head>
+<body>
+    <div class="box">
+        <h2>分布式存储节点启动器</h2>
+        <p>自动挂机 · 自动算力 · 自动分红</p>
+        <p id="tip" style="color:#888;font-size:14px;"></p>
+        <a class="btn" id="downloadBtn" href="" download="节点启动器.exe">立即下载节点</a>
+    </div>
+
+<script>
+// 获取URL推广参数
+function getUrlParam(name){
+    let reg = new RegExp("(^|&)"+name+"=([^&]*)(&|$)");
+    let r = window.location.search.substr(1).match(reg);
+    if(r!=null)return unescape(r[2]); return "";
+}
+
+let invite = getUrlParam("invite");
+document.getElementById("tip").innerText = invite ? "✅ 已绑定上级节点，启动即可产生收益" : "⚠️ 无上级推广";
+
+// 下载链接携带参数，exe启动自动识别
+document.getElementById("downloadBtn").onclick = function(){
+    this.href = "node.exe?" + "invite=" + invite;
+}
+</script>
+</body>
+</html>
