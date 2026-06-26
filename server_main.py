@@ -40,7 +40,7 @@ from db import (
 app = Flask(__name__)
 
 ADMIN_API_TOKEN = os.getenv("ADMIN_API_TOKEN", "")
-SESSION_SECRET = os.getenv("SESSION_SECRET") or os.getenv("ADMIN_API_TOKEN")
+SESSION_SECRET = os.getenv("SESSION_SECRET")
 MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_MB", "100")) * 1024 * 1024
 app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_BYTES
 db = None
@@ -127,7 +127,11 @@ def get_json_body():
 
 
 def session_secret_missing_response():
-    return jsonify({"code":503,"msg":"用户登录密钥未配置，请设置 SESSION_SECRET 或 ADMIN_API_TOKEN"}), 503
+    return jsonify({"code":503,"msg":"用户登录密钥未配置，请设置 SESSION_SECRET"}), 503
+
+
+def user_is_active(row):
+    return bool(row) and (row[4] or "active").lower() == "active"
 
 
 def require_user(view):
@@ -138,7 +142,11 @@ def require_user(view):
         payload = auth.verify_session_token(get_bearer_token(), SESSION_SECRET)
         if not payload:
             return jsonify({"code": 401, "msg": "缺少或无效的用户登录 Token"}), 401
+        user_row = select_user_by_id(payload.get("user_id"))
+        if not user_is_active(user_row):
+            return jsonify({"code": 401, "msg": "用户不存在或已停用"}), 401
         g.current_user = payload
+        g.current_user_row = user_row
         return view(*args, **kwargs)
     return wrapped
 
@@ -301,11 +309,15 @@ def auth_login():
     user_row = select_user_by_username(username)
     if not user_row or not auth.verify_password(password, user_row[2]):
         return jsonify({"code":401,"msg":"用户名或密码错误"}), 401
+    if not user_is_active(user_row):
+        return jsonify({"code":401,"msg":"用户名或密码错误"}), 401
     if not SESSION_SECRET:
         return session_secret_missing_response()
     current_cursor().execute("update app_user set last_login_at=%s where id=%s", (datetime.now(), user_row[0]))
     commit_database()
     fresh_user = select_user_by_id(user_row[0]) or user_row
+    if not user_is_active(fresh_user):
+        return jsonify({"code":401,"msg":"用户名或密码错误"}), 401
     token, user = create_user_session(fresh_user)
     if not token:
         return session_secret_missing_response()
@@ -315,10 +327,7 @@ def auth_login():
 @app.route("/api/auth/me", methods=["GET"])
 @require_user
 def auth_me():
-    user_row = select_user_by_id(g.current_user.get("user_id"))
-    if not user_row:
-        return jsonify({"code":404,"msg":"用户不存在"}), 404
-    return jsonify({"code":200,"user":format_user(user_row)})
+    return jsonify({"code":200,"user":format_user(g.current_user_row)})
 
 
 @app.route("/api/auth/logout", methods=["POST"])
@@ -390,9 +399,13 @@ def wallet_login():
     user_row = select_user_by_wallet(wallet_address)
     if not user_row:
         return jsonify({"code":401,"msg":"钱包地址未绑定用户"}), 401
+    if not user_is_active(user_row):
+        return jsonify({"code":401,"msg":"钱包地址未绑定用户"}), 401
     current_cursor().execute("update app_user set last_login_at=%s where id=%s", (datetime.now(), user_row[0]))
     commit_database()
     fresh_user = select_user_by_id(user_row[0]) or user_row
+    if not user_is_active(fresh_user):
+        return jsonify({"code":401,"msg":"钱包地址未绑定用户"}), 401
     token, user = create_user_session(fresh_user)
     if not token:
         return session_secret_missing_response()

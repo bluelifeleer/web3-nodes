@@ -207,7 +207,7 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertEqual(response.status_code, 503)
         self.assertEqual(response.content_type, "application/json")
 
-    def test_login_can_issue_token_with_admin_api_token_secret(self):
+    def test_login_does_not_use_admin_api_token_as_session_secret(self):
         auth = importlib.import_module("auth")
         server_main = load_server_main(ADMIN_API_TOKEN="admin-secret")
         server_main.init_db = lambda: True
@@ -237,8 +237,60 @@ class MysqlConfigTest(unittest.TestCase):
             json={"username": "alice", "password": "pw"},
         )
 
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.content_type, "application/json")
+
+    def test_login_can_issue_token_with_session_secret(self):
+        auth = importlib.import_module("auth")
+        server_main = load_server_main(SESSION_SECRET="session-secret")
+        server_main.init_db = lambda: True
+        server_main.select_user_by_username = lambda username: (
+            1,
+            username,
+            auth.hash_password("pw"),
+            "",
+            "active",
+        )
+        server_main.select_user_by_id = lambda user_id: (
+            user_id,
+            "alice",
+            auth.hash_password("pw"),
+            "",
+            "active",
+        )
+
+        class FakeCursor:
+            def execute(self, *args, **kwargs):
+                return None
+
+        server_main.cursor = FakeCursor()
+
+        response = server_main.app.test_client().post(
+            "/api/auth/login",
+            json={"username": "alice", "password": "pw"},
+        )
+
         self.assertEqual(response.status_code, 200)
         self.assertIn("token", response.get_json())
+
+    def test_login_rejects_inactive_user(self):
+        auth = importlib.import_module("auth")
+        server_main = load_server_main(SESSION_SECRET="session-secret")
+        server_main.init_db = lambda: True
+        server_main.select_user_by_username = lambda username: (
+            1,
+            username,
+            auth.hash_password("pw"),
+            "",
+            "disabled",
+        )
+
+        response = server_main.app.test_client().post(
+            "/api/auth/login",
+            json={"username": "alice", "password": "pw"},
+        )
+
+        self.assertEqual(response.status_code, 401)
 
     def test_auth_me_requires_user_token(self):
         server_main = load_server_main(SESSION_SECRET="session-secret")
@@ -285,6 +337,26 @@ class MysqlConfigTest(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
+
+    def test_auth_me_rejects_inactive_user_token(self):
+        auth = importlib.import_module("auth")
+        server_main = load_server_main(SESSION_SECRET="session-secret")
+        server_main.init_db = lambda: True
+        server_main.select_user_by_id = lambda user_id: (
+            user_id,
+            "alice",
+            "hash",
+            "",
+            "disabled",
+        )
+        token = auth.create_session_token({"user_id": 7, "username": "alice"}, "session-secret")
+
+        response = server_main.app.test_client().get(
+            "/api/auth/me",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        self.assertEqual(response.status_code, 401)
 
     def test_wallet_nonce_rowcount_zero_rejects_consumption(self):
         server_main = load_server_main(SESSION_SECRET="session-secret")
@@ -336,6 +408,13 @@ class MysqlConfigTest(unittest.TestCase):
         server_main = load_server_main(SESSION_SECRET="session-secret")
         server_main.init_db = lambda: True
         token = auth.create_session_token({"user_id": 7, "username": "alice"}, "session-secret")
+        server_main.select_user_by_id = lambda user_id: (
+            user_id,
+            "alice",
+            "hash",
+            "",
+            "active",
+        )
         client = server_main.app.test_client()
 
         array_response = client.post(
@@ -380,6 +459,13 @@ class MysqlConfigTest(unittest.TestCase):
         server_main = load_server_main(SESSION_SECRET="session-secret")
         server_main.init_db = lambda: True
         token = auth.create_session_token({"user_id": 7, "username": "alice"}, "session-secret")
+        server_main.select_user_by_id = lambda user_id: (
+            user_id,
+            "alice",
+            "hash",
+            "",
+            "active",
+        )
 
         class FakeCursor:
             def execute(self, *args, **kwargs):
@@ -398,6 +484,25 @@ class MysqlConfigTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.content_type, "application/json")
+
+    def test_wallet_login_rejects_inactive_user(self):
+        server_main = load_server_main(SESSION_SECRET="session-secret")
+        server_main.init_db = lambda: True
+        server_main.consume_wallet_nonce = lambda wallet, nonce, purpose, signature: (True, "")
+        server_main.select_user_by_wallet = lambda wallet_address: (
+            7,
+            "alice",
+            "hash",
+            wallet_address,
+            "disabled",
+        )
+
+        response = server_main.app.test_client().post(
+            "/api/wallet/login",
+            json={"wallet_address": "0xabc", "nonce": "nonce1", "signature": "sig"},
+        )
+
+        self.assertEqual(response.status_code, 401)
 
     def test_default_database_engine_is_postgresql(self):
         server_main = load_server_main()
