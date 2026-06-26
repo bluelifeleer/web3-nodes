@@ -20,6 +20,7 @@ try:
     import reedsolo
 except ImportError:
     reedsolo = None
+import db as database_module
 from db import (
     BASE_DIR,
     DB_CONFIG,
@@ -27,7 +28,6 @@ from db import (
     INIT_SQL_PATH,
     connect_database,
     current_cursor as get_current_cursor,
-    ensure_database_initialized,
     load_env_file,
     node_alive_interval_sql,
     node_location_upsert_sql,
@@ -66,6 +66,13 @@ def init_db():
 
 def current_cursor():
     return get_current_cursor(cursor)
+
+
+def ensure_database_initialized(sql_path=INIT_SQL_PATH):
+    global db_error
+    initialized = database_module.ensure_database_initialized(sql_path=sql_path)
+    db_error = database_module.db_error
+    return initialized
 
 
 ADMIN_PROTECTED_PATHS = {

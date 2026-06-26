@@ -308,6 +308,13 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertTrue(server_main.ensure_database_initialized())
         self.assertIn("close", calls)
 
+    def test_database_initializer_failure_updates_server_error(self):
+        server_main = load_server_main(DB_ENGINE="mysql")
+        missing_path = Path("tests/missing-init-file.sql")
+
+        self.assertFalse(server_main.ensure_database_initialized(sql_path=missing_path))
+        self.assertIn("missing-init-file.sql", server_main.db_error)
+
     def test_admin_api_requires_token_before_mutation(self):
         server_main = load_server_main(ADMIN_API_TOKEN="secret-token")
         client = server_main.app.test_client()
