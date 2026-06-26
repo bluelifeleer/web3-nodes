@@ -597,6 +597,7 @@ def format_user_file_records(rows):
 
 
 SAFE_SHARE_CODE_RE = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
+SHARE_CODE_CREATE_ATTEMPTS = 5
 
 
 def validate_share_code(share_code):
@@ -641,6 +642,36 @@ def select_share_row(share_code):
     limit 1
     """,(share_code,))
     return current_cursor().fetchone()
+
+
+def insert_file_share_with_retry(file_hash, owner_user_id, visibility, extract_code_hash, expires_at, max_downloads, status):
+    for attempt in range(SHARE_CODE_CREATE_ATTEMPTS):
+        share_code = shares.create_share_code()
+        try:
+            current_cursor().execute(
+                """
+                insert into file_share(share_code,file_hash,owner_user_id,visibility,extract_code_hash,expires_at,max_downloads,status)
+                values(%s,%s,%s,%s,%s,%s,%s,%s)
+                """,
+                (
+                    share_code,
+                    file_hash,
+                    owner_user_id,
+                    visibility,
+                    extract_code_hash,
+                    expires_at,
+                    max_downloads,
+                    status,
+                ),
+            )
+            return share_code, None
+        except Exception as exc:
+            rollback_database()
+            if not duplicate_database_error(exc):
+                return None, "分享创建失败"
+            if attempt == SHARE_CODE_CREATE_ATTEMPTS - 1:
+                return None, "分享码生成冲突，请重试"
+    return None, "分享码生成冲突，请重试"
 
 
 def filter_file_records(rows, keyword="", page=1, page_size=20):
@@ -1909,24 +1940,17 @@ def user_file_share_create(file_hash):
         return jsonify({"code":400,"msg":max_error}), 400
     extract_code = str(data.get("extract_code") or "").strip()
     extract_code_hash = shares.hash_extract_code(extract_code) if extract_code else ""
-    share_code = shares.create_share_code()
-
-    current_cursor().execute(
-        """
-        insert into file_share(share_code,file_hash,owner_user_id,visibility,extract_code_hash,expires_at,max_downloads,status)
-        values(%s,%s,%s,%s,%s,%s,%s,%s)
-        """,
-        (
-            share_code,
-            file_hash,
-            owner_user_id,
-            visibility,
-            extract_code_hash,
-            expires_at,
-            max_downloads,
-            status,
-        ),
+    share_code, create_error = insert_file_share_with_retry(
+        file_hash,
+        owner_user_id,
+        visibility,
+        extract_code_hash,
+        expires_at,
+        max_downloads,
+        status,
     )
+    if create_error:
+        return jsonify({"code":500,"msg":create_error}), 500
     commit_database()
     return jsonify({
         "code":200,
@@ -2012,6 +2036,9 @@ def user_share_update(share_code):
         f"update file_share set {','.join(updates)} where share_code=%s and owner_user_id=%s and status<>'deleted'",
         tuple(params),
     )
+    if getattr(current_cursor(), "rowcount", None) == 0:
+        rollback_database()
+        return jsonify({"code":404,"msg":"分享不存在"}), 404
     commit_database()
     return jsonify({"code":200,"msg":"分享已更新"})
 
@@ -2044,8 +2071,7 @@ def public_share_detail(share_code):
     allowed, status_code, message = shares.validate_share_access(share)
     if not allowed:
         return jsonify({"code":status_code,"msg":message}), status_code
-    share.pop("extract_code_hash", None)
-    return jsonify({"code":200,"data":share})
+    return jsonify({"code":200,"data":shares.format_public_share(share)})
 
 
 @app.route("/api/share/<share_code>/verify", methods=["POST"])

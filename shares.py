@@ -1,6 +1,6 @@
 import hashlib
 import secrets
-from datetime import UTC, datetime, timezone
+from datetime import datetime
 
 
 SHARE_SELECT_PROJECTION = (
@@ -51,17 +51,17 @@ def parse_datetime(value):
             return None
 
 
-def _as_utc_naive(value):
+def _as_local_naive(value):
     if value and value.tzinfo is not None:
-        return value.astimezone(timezone.utc).replace(tzinfo=None)
+        return value.astimezone().replace(tzinfo=None)
     return value
 
 
 def validate_share_access(share):
     if not share or str(share.get("status") or "").lower() != "active":
         return False, 404, "分享不存在"
-    expires_at = _as_utc_naive(parse_datetime(share.get("expires_at")))
-    if expires_at and expires_at <= datetime.now(UTC).replace(tzinfo=None):
+    expires_at = _as_local_naive(parse_datetime(share.get("expires_at")))
+    if expires_at and expires_at <= datetime.now():
         return False, 410, "分享已过期"
     max_downloads = int(share.get("max_downloads") or 0)
     download_count = int(share.get("download_count") or 0)
@@ -88,3 +88,19 @@ def format_share_row(row, include_extract_code_hash=False):
     if include_extract_code_hash:
         share["extract_code_hash"] = row[4] or ""
     return share
+
+
+def format_public_share(share):
+    public_keys = {
+        "share_code",
+        "file_name",
+        "file_size",
+        "visibility",
+        "extract_code_required",
+        "expires_at",
+        "max_downloads",
+        "download_count",
+        "status",
+        "created_at",
+    }
+    return {key: share[key] for key in public_keys if key in share}

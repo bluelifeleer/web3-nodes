@@ -159,6 +159,21 @@ class MysqlConfigTest(unittest.TestCase):
 
         self.assertEqual(result, (False, 429, "下载次数已用完"))
 
+    def test_validate_share_access_treats_naive_expiry_as_server_local_time(self):
+        shares = importlib.import_module("shares")
+        datetime_module = importlib.import_module("datetime")
+        expired_local_time = datetime_module.datetime.now() - datetime_module.timedelta(seconds=1)
+        expired_share = {
+            "status": "active",
+            "expires_at": expired_local_time,
+            "max_downloads": 0,
+            "download_count": 0,
+        }
+
+        result = shares.validate_share_access(expired_share)
+
+        self.assertEqual(result, (False, 410, "分享已过期"))
+
     def test_wallet_login_message_contains_nonce_and_purpose(self):
         auth = importlib.import_module("auth")
 
@@ -1724,6 +1739,61 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertEqual(insert_params[2], 7)
         self.assertNotEqual(insert_params[4], "ABCD")
 
+    def test_create_share_retries_duplicate_share_code_collision(self):
+        auth = importlib.import_module("auth")
+        server_main = load_server_main(SESSION_SECRET="session-secret")
+        token = auth.create_session_token({"user_id": 7, "username": "alice"}, "session-secret")
+        file_hash = "e" * 64
+        generated_codes = iter(["dupe-code", "fresh-code"])
+        events = []
+
+        class FakeCursor:
+            def __init__(self):
+                self.executed = []
+                self.last_sql = ""
+
+            def execute(self, sql, params=None):
+                self.last_sql = sql
+                self.executed.append((sql, params))
+                if sql.strip().lower().startswith("insert into file_share") and params[0] == "dupe-code":
+                    raise Exception("Duplicate entry 'dupe-code' for key 'idx_file_share_code'")
+
+            def fetchone(self):
+                if "from app_user" in self.last_sql:
+                    return (7, "alice", "hash", "0xabc", "active")
+                if "from file_chain_record" in self.last_sql:
+                    return (file_hash, 7)
+                return None
+
+        class FakeConnection:
+            def commit(self):
+                events.append("commit")
+
+            def rollback(self):
+                events.append("rollback")
+
+        fake_cursor = FakeCursor()
+        server_main.cursor = fake_cursor
+        server_main.db = FakeConnection()
+        server_main.init_db = lambda: True
+        server_main.shares.create_share_code = lambda: next(generated_codes)
+
+        response = server_main.app.test_client().post(
+            f"/api/user/files/{file_hash}/shares",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"extract_code": "ABCD", "max_downloads": 2},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["data"]["share_code"], "fresh-code")
+        insert_codes = [
+            params[0] for sql, params in fake_cursor.executed
+            if sql.strip().lower().startswith("insert into file_share")
+        ]
+        self.assertEqual(insert_codes, ["dupe-code", "fresh-code"])
+        self.assertIn("rollback", events)
+        self.assertEqual(events[-1], "commit")
+
     def test_user_shares_list_uses_current_owner_and_hides_extract_hash(self):
         auth = importlib.import_module("auth")
         server_main = load_server_main(SESSION_SECRET="session-secret")
@@ -1826,6 +1896,41 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertIn("owner_user_id=%s", update_queries[0][0])
         self.assertIn("owner_user_id=%s", update_queries[1][0])
 
+    def test_update_share_returns_404_when_update_rowcount_is_zero(self):
+        auth = importlib.import_module("auth")
+        server_main = load_server_main(SESSION_SECRET="session-secret")
+        token = auth.create_session_token({"user_id": 7, "username": "alice"}, "session-secret")
+
+        class FakeCursor:
+            def __init__(self):
+                self.last_sql = ""
+                self.rowcount = 1
+
+            def execute(self, sql, params=None):
+                self.last_sql = sql
+                if sql.strip().lower().startswith("update file_share"):
+                    self.rowcount = 0
+
+            def fetchone(self):
+                if "from app_user" in self.last_sql:
+                    return (7, "alice", "hash", "0xabc", "active")
+                if "from file_share" in self.last_sql:
+                    return ("share123",)
+                return None
+
+        server_main.cursor = FakeCursor()
+        server_main.db = types.SimpleNamespace(commit=lambda: None)
+        server_main.init_db = lambda: True
+
+        response = server_main.app.test_client().patch(
+            "/api/user/shares/share123",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"status": "inactive"},
+        )
+
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.get_json()["msg"], "分享不存在")
+
     def test_public_share_missing_returns_json_404(self):
         server_main = load_server_main()
 
@@ -1888,6 +1993,8 @@ class MysqlConfigTest(unittest.TestCase):
         share = response.get_json()["data"]
         self.assertTrue(share["extract_code_required"])
         self.assertNotIn("extract_code_hash", share)
+        self.assertNotIn("file_hash", share)
+        self.assertNotIn("owner_user_id", share)
         self.assertEqual(share["file_name"], "demo.txt")
 
     def test_public_share_verify_checks_extract_code(self):
