@@ -239,6 +239,7 @@ class MysqlConfigTest(unittest.TestCase):
         migrations = "\n".join(server_main.database_module.POSTGRES_SCHEMA_MIGRATIONS)
 
         expected_indexes = (
+            ("idx_file_chain_owner", "file_chain_record", "owner_user_id"),
             ("idx_wallet_nonce_address", "wallet_nonce", "wallet_address"),
             ("idx_file_share_file", "file_share", "file_hash"),
             ("idx_file_share_owner", "file_share", "owner_user_id"),
@@ -261,6 +262,7 @@ class MysqlConfigTest(unittest.TestCase):
         migrations = "\n".join(server_main.database_module.SCHEMA_MIGRATIONS)
 
         expected_keys = (
+            ("idx_file_chain_owner", "owner_user_id"),
             ("idx_wallet_nonce_address", "wallet_address"),
             ("idx_file_share_file", "file_hash"),
             ("idx_file_share_owner", "owner_user_id"),
@@ -273,7 +275,10 @@ class MysqlConfigTest(unittest.TestCase):
         )
 
         for index_name, column_name in expected_keys:
-            self.assertIn(f"KEY `{index_name}` (`{column_name}`)", sql)
+            if index_name == "idx_file_chain_owner":
+                self.assertIn("CREATE INDEX idx_file_chain_owner ON `file_chain_record` (`owner_user_id`)", sql)
+            else:
+                self.assertIn(f"KEY `{index_name}` (`{column_name}`)", sql)
             self.assertIn(f"CREATE INDEX {index_name}", migrations)
 
     def test_sql_dialect_helpers_switch_by_engine(self):

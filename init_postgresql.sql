@@ -73,6 +73,7 @@ ALTER TABLE file_chain_record ADD COLUMN IF NOT EXISTS owner_user_id integer DEF
 ALTER TABLE file_chain_record ADD COLUMN IF NOT EXISTS owner_wallet_address varchar(128) DEFAULT '';
 ALTER TABLE file_chain_record ADD COLUMN IF NOT EXISTS download_count integer DEFAULT 0;
 ALTER TABLE file_chain_record ADD COLUMN IF NOT EXISTS last_download_at timestamp DEFAULT NULL;
+CREATE INDEX IF NOT EXISTS idx_file_chain_owner ON file_chain_record (owner_user_id);
 
 CREATE TABLE IF NOT EXISTS app_user (
     id SERIAL PRIMARY KEY,
