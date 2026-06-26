@@ -292,6 +292,25 @@ class MysqlConfigTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 401)
 
+    def test_login_rejects_null_status_user(self):
+        auth = importlib.import_module("auth")
+        server_main = load_server_main(SESSION_SECRET="session-secret")
+        server_main.init_db = lambda: True
+        server_main.select_user_by_username = lambda username: (
+            1,
+            username,
+            auth.hash_password("pw"),
+            "",
+            None,
+        )
+
+        response = server_main.app.test_client().post(
+            "/api/auth/login",
+            json={"username": "alice", "password": "pw"},
+        )
+
+        self.assertEqual(response.status_code, 401)
+
     def test_auth_me_requires_user_token(self):
         server_main = load_server_main(SESSION_SECRET="session-secret")
         server_main.init_db = lambda: True
@@ -348,6 +367,26 @@ class MysqlConfigTest(unittest.TestCase):
             "hash",
             "",
             "disabled",
+        )
+        token = auth.create_session_token({"user_id": 7, "username": "alice"}, "session-secret")
+
+        response = server_main.app.test_client().get(
+            "/api/auth/me",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        self.assertEqual(response.status_code, 401)
+
+    def test_auth_me_rejects_null_status_user_token(self):
+        auth = importlib.import_module("auth")
+        server_main = load_server_main(SESSION_SECRET="session-secret")
+        server_main.init_db = lambda: True
+        server_main.select_user_by_id = lambda user_id: (
+            user_id,
+            "alice",
+            "hash",
+            "",
+            None,
         )
         token = auth.create_session_token({"user_id": 7, "username": "alice"}, "session-secret")
 

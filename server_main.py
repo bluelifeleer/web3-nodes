@@ -131,7 +131,7 @@ def session_secret_missing_response():
 
 
 def user_is_active(row):
-    return bool(row) and (row[4] or "active").lower() == "active"
+    return bool(row) and str(row[4] or "").strip().lower() == "active"
 
 
 def require_user(view):
