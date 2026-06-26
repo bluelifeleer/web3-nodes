@@ -255,6 +255,14 @@ def consume_wallet_nonce(wallet_address, nonce, purpose, signature):
     return True, ""
 
 
+def wallet_fields_missing(data):
+    return not (
+        auth.normalize_wallet_address(data.get("wallet_address"))
+        and data.get("nonce")
+        and data.get("signature")
+    )
+
+
 @app.route("/api/auth/register", methods=["POST"])
 def auth_register():
     data = get_json_body()
@@ -349,6 +357,8 @@ def wallet_nonce():
 def wallet_bind():
     data = get_json_body()
     wallet_address = auth.normalize_wallet_address(data.get("wallet_address"))
+    if wallet_fields_missing(data):
+        return jsonify({"code":400,"msg":"缺少钱包地址、nonce 或签名"}), 400
     ok, msg = consume_wallet_nonce(wallet_address, data.get("nonce"), "bind", data.get("signature"))
     if not ok:
         return jsonify({"code":401,"msg":msg}), 401
@@ -370,6 +380,8 @@ def wallet_bind():
 def wallet_login():
     data = get_json_body()
     wallet_address = auth.normalize_wallet_address(data.get("wallet_address"))
+    if wallet_fields_missing(data):
+        return jsonify({"code":400,"msg":"缺少钱包地址、nonce 或签名"}), 400
     if not SESSION_SECRET:
         return session_secret_missing_response()
     ok, msg = consume_wallet_nonce(wallet_address, data.get("nonce"), "login", data.get("signature"))

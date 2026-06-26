@@ -318,6 +318,42 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.content_type, "application/json")
 
+    def test_wallet_login_missing_fields_return_json_400(self):
+        server_main = load_server_main(SESSION_SECRET="session-secret")
+        server_main.init_db = lambda: True
+        client = server_main.app.test_client()
+
+        array_response = client.post("/api/wallet/login", json=[1])
+        partial_response = client.post("/api/wallet/login", json={"wallet_address": "0xabc"})
+
+        self.assertEqual(array_response.status_code, 400)
+        self.assertEqual(array_response.content_type, "application/json")
+        self.assertEqual(partial_response.status_code, 400)
+        self.assertEqual(partial_response.content_type, "application/json")
+
+    def test_wallet_bind_missing_fields_return_json_400(self):
+        auth = importlib.import_module("auth")
+        server_main = load_server_main(SESSION_SECRET="session-secret")
+        server_main.init_db = lambda: True
+        token = auth.create_session_token({"user_id": 7, "username": "alice"}, "session-secret")
+        client = server_main.app.test_client()
+
+        array_response = client.post(
+            "/api/wallet/bind",
+            headers={"Authorization": f"Bearer {token}"},
+            json=[1],
+        )
+        partial_response = client.post(
+            "/api/wallet/bind",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"wallet_address": "0xabc"},
+        )
+
+        self.assertEqual(array_response.status_code, 400)
+        self.assertEqual(array_response.content_type, "application/json")
+        self.assertEqual(partial_response.status_code, 400)
+        self.assertEqual(partial_response.content_type, "application/json")
+
     def test_default_database_engine_is_postgresql(self):
         server_main = load_server_main()
 
