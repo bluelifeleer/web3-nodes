@@ -32,8 +32,11 @@ CREATE TABLE IF NOT EXISTS `node_reward` (
   `reward_type` tinyint DEFAULT 1 COMMENT '1本级收益 2上级分成收益',
   `reward_amount` float DEFAULT 0,
   `node_contribution` float DEFAULT 0 COMMENT '对应贡献值',
+  `source_user_address` varchar(64) DEFAULT '' COMMENT '收益来源节点',
+  `settle_date` date DEFAULT NULL COMMENT '结算日期，防重复结算',
   `settle_time` datetime DEFAULT CURRENT_TIMESTAMP COMMENT '结算时间',
-  PRIMARY KEY (`id`)
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `idx_reward_once` (`user_address`,`reward_type`,`source_user_address`,`settle_date`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='节点收益分成记录';
 
 CREATE TABLE IF NOT EXISTS `file_chain_record` (
@@ -45,7 +48,10 @@ CREATE TABLE IF NOT EXISTS `file_chain_record` (
   `shard_count` int DEFAULT 0 COMMENT '分片数量',
   `upload_user` varchar(64) DEFAULT '' COMMENT '上传用户节点',
   `stored_nodes` text COMMENT '保存分片的节点列表',
+  `visibility` varchar(16) DEFAULT 'public' COMMENT 'public公开 private凭token访问',
+  `access_token` varchar(64) DEFAULT '' COMMENT '私有文件访问令牌',
   `create_time` datetime DEFAULT CURRENT_TIMESTAMP,
+  `deleted_at` datetime DEFAULT NULL COMMENT '软删除时间',
   PRIMARY KEY (`id`),
   UNIQUE KEY `idx_file_hash` (`file_hash`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

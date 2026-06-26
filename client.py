@@ -5,6 +5,10 @@ import uuid
 import subprocess
 import random
 import requests
+import sys
+from pathlib import Path
+import os
+import json
 try:
     import webview
 except Exception:
@@ -14,6 +18,41 @@ except Exception:
 SERVER_URL = "http://127.0.0.1:8000"
 # 上级推广码（分享链接自动填充，用户无需手动改）
 PARENT_INVITE = ""
+HEARTBEAT_INTERVAL = 60
+
+
+def load_client_config(config_path="node_config.json"):
+    config = {
+        "server_url": SERVER_URL,
+        "parent_invite": PARENT_INVITE,
+        "heartbeat_interval": HEARTBEAT_INTERVAL,
+    }
+    path = Path(config_path)
+    if path.exists():
+        try:
+            file_config = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(file_config, dict):
+                config.update({key: value for key, value in file_config.items() if value not in (None, "")})
+        except Exception:
+            pass
+    config["server_url"] = os.getenv("NODE_SERVER_URL", config["server_url"])
+    config["parent_invite"] = os.getenv("NODE_PARENT_INVITE", config["parent_invite"])
+    config["heartbeat_interval"] = int(os.getenv("NODE_HEARTBEAT_INTERVAL", config["heartbeat_interval"]))
+    return config
+
+
+def get_invite_arg():
+    for arg in sys.argv[1:]:
+        if arg.startswith("invite="):
+            return arg.split("=", 1)[1].strip()
+        if arg.startswith("--invite="):
+            return arg.split("=", 1)[1].strip()
+
+    exe_name = Path(sys.executable).stem
+    marker = "invite_"
+    if marker in exe_name:
+        return exe_name.split(marker, 1)[1].strip()
+    return ""
 
 # 生成唯一设备指纹（防多开、防作弊）
 def get_device_mac():
@@ -35,6 +74,11 @@ def get_local_disk_use():
 
 # 节点核心运行逻辑
 def client_run():
+    global SERVER_URL, PARENT_INVITE, HEARTBEAT_INTERVAL
+    config = load_client_config()
+    SERVER_URL = config["server_url"]
+    PARENT_INVITE = get_invite_arg() or config["parent_invite"]
+    HEARTBEAT_INTERVAL = int(config["heartbeat_interval"])
     device_mac = get_device_mac()
     # 根据设备MAC生成唯一用户标识
     user_addr = "NODE_" + hashlib.md5(device_mac.encode()).hexdigest()[:12]
@@ -77,7 +121,7 @@ def client_run():
         except:
             pass
         
-        time.sleep(60)
+        time.sleep(HEARTBEAT_INTERVAL)
 
 
 def open_map_window():

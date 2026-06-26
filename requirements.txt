@@ -1,5 +1,6 @@
 Flask
 PyMySQL
+psycopg[binary]
 requests
 pycryptodome
 ipfshttpclient

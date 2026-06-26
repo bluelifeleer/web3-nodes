@@ -1,0 +1,8 @@
+.env
+node_config.json
+chunk_tmp/
+dist/
+build/
+*.spec
+__pycache__/
+*.pyc

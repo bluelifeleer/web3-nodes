@@ -5,6 +5,8 @@ import hashlib
 import uuid
 import requests
 import subprocess
+import json
+from pathlib import Path
 try:
     import webview
 except Exception:
@@ -14,6 +16,27 @@ except Exception:
 SERVER_URL = "http://127.0.0.1:8000"
 # 推广参数自动注入，无需手动填写
 PARENT_INVITE = ""
+HEARTBEAT_INTERVAL = 60
+
+
+def load_client_config(config_path="node_config.json"):
+    config = {
+        "server_url": SERVER_URL,
+        "parent_invite": PARENT_INVITE,
+        "heartbeat_interval": HEARTBEAT_INTERVAL,
+    }
+    path = Path(config_path)
+    if path.exists():
+        try:
+            file_config = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(file_config, dict):
+                config.update({key: value for key, value in file_config.items() if value not in (None, "")})
+        except Exception:
+            pass
+    config["server_url"] = os.getenv("NODE_SERVER_URL", config["server_url"])
+    config["parent_invite"] = os.getenv("NODE_PARENT_INVITE", config["parent_invite"])
+    config["heartbeat_interval"] = int(os.getenv("NODE_HEARTBEAT_INTERVAL", config["heartbeat_interval"]))
+    return config
 
 # 解析启动参数（下载页携带的invite推广码）
 def get_invite_arg():
@@ -43,9 +66,12 @@ def get_ipfs_disk():
 
 # 核心节点运行逻辑
 def main():
-    global PARENT_INVITE
+    global SERVER_URL, PARENT_INVITE, HEARTBEAT_INTERVAL
+    config = load_client_config()
+    SERVER_URL = config["server_url"]
     # 读取下载页传入的上级推广码
-    PARENT_INVITE = get_invite_arg()
+    PARENT_INVITE = get_invite_arg() or config["parent_invite"]
+    HEARTBEAT_INTERVAL = int(config["heartbeat_interval"])
 
     # 生成唯一设备标识+用户节点地址
     device_id = get_device_id()
@@ -85,7 +111,7 @@ def main():
         except:
             pass
         # 休眠60秒，降低设备功耗
-        time.sleep(60)
+        time.sleep(HEARTBEAT_INTERVAL)
 
 def open_map_window():
     if webview is None:
