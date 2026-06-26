@@ -1,4 +1,5 @@
 import importlib
+import io
 import os
 import sys
 import types
@@ -1321,6 +1322,167 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertEqual(file_queries[-1][1], (7,))
         self.assertIn("owner_user_id=%s", file_queries[-1][0])
         self.assertIn("deleted_at is null", file_queries[-1][0])
+
+    def test_user_file_upload_duplicate_returns_409_before_ipfs(self):
+        auth = importlib.import_module("auth")
+        server_main = load_server_main(SESSION_SECRET="session-secret")
+        now = server_main.datetime.now()
+        token = auth.create_session_token({"user_id": 7, "username": "alice"}, "session-secret")
+        duplicate_hash = "a" * 64
+        ipfs_called = []
+
+        class FakeCursor:
+            def __init__(self):
+                self.last_sql = ""
+
+            def execute(self, sql, params=None):
+                self.last_sql = sql
+
+            def fetchone(self):
+                if "from app_user" in self.last_sql:
+                    return (7, "alice", "hash", "0xabc", "active")
+                if "from file_chain_record" in self.last_sql:
+                    return (
+                        1,
+                        "demo.txt",
+                        duplicate_hash,
+                        "cid",
+                        2.5,
+                        3,
+                        "NODE_A",
+                        "[]",
+                        now,
+                        "public",
+                        "",
+                        None,
+                        7,
+                        "0xabc",
+                        4,
+                        now,
+                    )
+                return None
+
+        server_main.cursor = FakeCursor()
+        server_main.db = types.SimpleNamespace(commit=lambda: None)
+        server_main.init_db = lambda: True
+        server_main.aes_encrypt = lambda data: b"encrypted"
+        server_main.file_shard = lambda data: [data]
+        server_main.get_file_hash = lambda data: duplicate_hash
+
+        def fail_if_called():
+            ipfs_called.append(True)
+            raise AssertionError("IPFS should not be called for duplicate uploads")
+
+        server_main.get_ipfs_client = fail_if_called
+
+        response = server_main.app.test_client().post(
+            "/api/user/files",
+            headers={"Authorization": f"Bearer {token}"},
+            data={"file": (io.BytesIO(b"plain"), "demo.txt")},
+            content_type="multipart/form-data",
+        )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.content_type, "application/json")
+        self.assertIn("文件已存在", response.get_json()["msg"])
+        self.assertFalse(ipfs_called)
+
+    def test_user_file_upload_db_failure_rolls_back(self):
+        auth = importlib.import_module("auth")
+        server_main = load_server_main(SESSION_SECRET="session-secret")
+        token = auth.create_session_token({"user_id": 7, "username": "alice"}, "session-secret")
+        new_hash = "b" * 64
+        rolled_back = []
+
+        class FakeCursor:
+            def __init__(self):
+                self.last_sql = ""
+
+            def execute(self, sql, params=None):
+                self.last_sql = sql
+                if sql.strip().lower().startswith("update node_power"):
+                    raise Exception("node update failed")
+
+            def fetchone(self):
+                if "from app_user" in self.last_sql:
+                    return (7, "alice", "hash", "0xabc", "active")
+                if "from file_chain_record" in self.last_sql:
+                    return None
+                return None
+
+        class FakeConnection:
+            def commit(self):
+                raise AssertionError("commit should not happen after mutation failure")
+
+            def rollback(self):
+                rolled_back.append(True)
+
+        class FakeIPFSClient:
+            def add_bytes(self, data):
+                return "cid"
+
+            def close(self):
+                pass
+
+        server_main.cursor = FakeCursor()
+        server_main.db = FakeConnection()
+        server_main.init_db = lambda: True
+        server_main.aes_encrypt = lambda data: b"encrypted"
+        server_main.file_shard = lambda data: [data]
+        server_main.get_file_hash = lambda data: new_hash
+        server_main.get_backup_nodes = lambda: ["NODE_A"]
+        server_main.get_ipfs_client = lambda: FakeIPFSClient()
+
+        response = server_main.app.test_client().post(
+            "/api/user/files",
+            headers={"Authorization": f"Bearer {token}"},
+            data={"file": (io.BytesIO(b"plain"), "demo.txt")},
+            content_type="multipart/form-data",
+        )
+
+        self.assertEqual(response.status_code, 500)
+        self.assertEqual(response.content_type, "application/json")
+        self.assertTrue(rolled_back)
+
+    def test_user_file_detail_and_delete_reject_malformed_hash(self):
+        auth = importlib.import_module("auth")
+        server_main = load_server_main(SESSION_SECRET="session-secret")
+        token = auth.create_session_token({"user_id": 7, "username": "alice"}, "session-secret")
+
+        class FakeCursor:
+            def __init__(self):
+                self.executed = []
+                self.last_sql = ""
+
+            def execute(self, sql, params=None):
+                self.last_sql = sql
+                self.executed.append((sql, params))
+
+            def fetchone(self):
+                if "from app_user" in self.last_sql:
+                    return (7, "alice", "hash", "0xabc", "active")
+                return None
+
+        fake_cursor = FakeCursor()
+        server_main.cursor = fake_cursor
+        server_main.init_db = lambda: True
+        client = server_main.app.test_client()
+
+        detail_response = client.get(
+            "/api/user/files/not-a-hash",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        delete_response = client.delete(
+            "/api/user/files/not-a-hash",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        self.assertEqual(detail_response.status_code, 400)
+        self.assertEqual(delete_response.status_code, 400)
+        file_queries = [
+            sql for sql, _ in fake_cursor.executed if "from file_chain_record" in sql
+        ]
+        self.assertEqual(file_queries, [])
 
     def test_filter_file_records_searches_and_paginates(self):
         server_main = load_server_main()

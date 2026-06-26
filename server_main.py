@@ -78,6 +78,12 @@ def commit_database():
         connection.commit()
 
 
+def rollback_database():
+    connection = getattr(g, "db", None) or db
+    if hasattr(connection, "rollback"):
+        connection.rollback()
+
+
 def ensure_database_initialized(sql_path=INIT_SQL_PATH):
     global db_error
     initialized = database_module.ensure_database_initialized(sql_path=sql_path)
@@ -1553,13 +1559,35 @@ def user_file_upload():
     if len(file_data) > MAX_UPLOAD_BYTES:
         return jsonify({"code":413,"msg":"文件超过上传大小限制"}), 413
 
+    user_row = getattr(g, "current_user_row", None) or ()
+    owner_user_id = user_row[0] if len(user_row) > 0 else g.current_user.get("user_id")
+    owner_wallet_address = user_row[3] if len(user_row) > 3 and user_row[3] else ""
+    username = user_row[1] if len(user_row) > 1 and user_row[1] else ""
+    upload_user = owner_wallet_address or username
+    real_file_hash = get_file_hash(file_data)
+    current_cursor().execute(f"""
+    select {USER_FILE_SELECT_PROJECTION}
+    from file_chain_record
+    where file_hash=%s and deleted_at is null
+    order by create_time desc
+    limit 1
+    """,(real_file_hash,))
+    duplicate_row = current_cursor().fetchone()
+    if duplicate_row:
+        duplicate_response = {
+            "code":409,
+            "msg":"文件已存在，当前版本暂不支持重复上传",
+        }
+        if duplicate_row[12] == owner_user_id:
+            duplicate_response["data"] = format_user_file_record(duplicate_row)
+        return jsonify(duplicate_response), 409
+
     try:
         encrypt_data = aes_encrypt(file_data)
     except RuntimeError as exc:
         return jsonify({"code":500,"msg":str(exc)}), 500
     shards = file_shard(encrypt_data)
     shard_num = len(shards)
-    real_file_hash = get_file_hash(file_data)
 
     try:
         client = get_ipfs_client()
@@ -1571,32 +1599,31 @@ def user_file_upload():
     except Exception:
         return jsonify({"code":400,"msg":"IPFS节点未启动"}), 400
 
-    user_row = getattr(g, "current_user_row", None) or ()
-    owner_user_id = user_row[0] if len(user_row) > 0 else g.current_user.get("user_id")
-    owner_wallet_address = user_row[3] if len(user_row) > 3 and user_row[3] else ""
-    username = user_row[1] if len(user_row) > 1 and user_row[1] else ""
-    upload_user = owner_wallet_address or username
     assign_nodes = get_backup_nodes()
-    current_cursor().execute('''
-    insert into file_chain_record(file_name,file_hash,ipfs_cid,file_size,shard_count,upload_user,stored_nodes,visibility,access_token,owner_user_id,owner_wallet_address)
-    values(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-    ''',(
-        uploaded_file.filename,
-        real_file_hash,
-        cid,
-        round(len(file_data)/1024/1024,3),
-        shard_num,
-        upload_user,
-        json.dumps(assign_nodes, ensure_ascii=False),
-        visibility,
-        access_token,
-        owner_user_id,
-        owner_wallet_address,
-    ))
+    try:
+        current_cursor().execute('''
+        insert into file_chain_record(file_name,file_hash,ipfs_cid,file_size,shard_count,upload_user,stored_nodes,visibility,access_token,owner_user_id,owner_wallet_address)
+        values(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+        ''',(
+            uploaded_file.filename,
+            real_file_hash,
+            cid,
+            round(len(file_data)/1024/1024,3),
+            shard_num,
+            upload_user,
+            json.dumps(assign_nodes, ensure_ascii=False),
+            visibility,
+            access_token,
+            owner_user_id,
+            owner_wallet_address,
+        ))
 
-    for node in assign_nodes:
-        current_cursor().execute('update node_power set disk_used=disk_used+0.1 where user_address=%s',(node,))
-    commit_database()
+        for node in assign_nodes:
+            current_cursor().execute('update node_power set disk_used=disk_used+0.1 where user_address=%s',(node,))
+        commit_database()
+    except Exception:
+        rollback_database()
+        return jsonify({"code":500,"msg":"文件记录保存失败"}), 500
 
     return jsonify({
         "code":200,
@@ -1631,6 +1658,8 @@ def user_file_list():
 @app.route("/api/user/files/<file_hash>", methods=["GET"])
 @require_user
 def user_file_detail(file_hash):
+    if not validate_file_hash(file_hash):
+        return jsonify({"code":400,"msg":"file_hash 格式无效"}), 400
     owner_user_id = g.current_user.get("user_id")
     current_cursor().execute(f"""
     select {USER_FILE_SELECT_PROJECTION}
@@ -1646,6 +1675,8 @@ def user_file_detail(file_hash):
 @app.route("/api/user/files/<file_hash>", methods=["DELETE"])
 @require_user
 def user_file_delete(file_hash):
+    if not validate_file_hash(file_hash):
+        return jsonify({"code":400,"msg":"file_hash 格式无效"}), 400
     owner_user_id = g.current_user.get("user_id")
     active_cursor = current_cursor()
     active_cursor.execute(
