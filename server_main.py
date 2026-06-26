@@ -14,6 +14,7 @@ import auth
 import points
 import shares
 import withdrawals
+from decimal import Decimal, InvalidOperation
 from files import USER_FILE_SELECT_PROJECTION, format_user_file_record
 try:
     from Crypto.Cipher import AES
@@ -716,8 +717,11 @@ def insert_point_ledger(user_id, wallet_address, point_type, amount, source_type
 
 def numeric_cell(row, index=0):
     if not row or row[index] is None:
-        return 0.0
-    return float(row[index])
+        return Decimal("0")
+    try:
+        return Decimal(str(row[index]))
+    except (InvalidOperation, TypeError, ValueError):
+        return Decimal("0")
 
 
 def format_withdrawal_row(row):
@@ -747,14 +751,14 @@ def format_point_ledger_row(row):
     }
 
 
-def calculate_user_earnings(user_id):
+def calculate_user_earnings(user_id, include_decimal=False):
     active_cursor = current_cursor()
     active_cursor.execute(
         "select coalesce(sum(amount),0) from point_ledger where user_id=%s",
         (user_id,),
     )
     total_points = numeric_cell(active_cursor.fetchone())
-    total_earnings = points.points_to_earning_units(total_points)
+    total_earnings = total_points / Decimal(str(points.POINTS_PER_EARNING_UNIT))
     active_cursor.execute(
         """
         select coalesce(sum(amount),0)
@@ -764,13 +768,16 @@ def calculate_user_earnings(user_id):
         (user_id,),
     )
     locked_withdrawals = numeric_cell(active_cursor.fetchone())
-    available_earnings = max(total_earnings - locked_withdrawals, 0.0)
-    return {
-        "total_points": total_points,
-        "total_earnings": total_earnings,
-        "locked_withdrawals": locked_withdrawals,
-        "available_earnings": available_earnings,
+    available_earnings = max(total_earnings - locked_withdrawals, Decimal("0"))
+    summary = {
+        "total_points": float(total_points),
+        "total_earnings": float(total_earnings),
+        "locked_withdrawals": float(locked_withdrawals),
+        "available_earnings": float(available_earnings),
     }
+    if include_decimal:
+        summary["_available_earnings_decimal"] = available_earnings
+    return summary
 
 
 def lock_active_user_for_update(user_id):
@@ -2008,10 +2015,10 @@ def user_withdrawal_list():
 @require_user
 def user_withdrawal_create():
     data = get_json_body()
-    ok, message = withdrawals.validate_withdrawal_amount(data.get("amount"))
-    if not ok:
+    amount, message = withdrawals.parse_withdrawal_amount(data.get("amount"))
+    if amount is None:
         return jsonify({"code":400,"msg":message}), 400
-    amount = float(data.get("amount"))
+    amount_for_db = withdrawals.format_withdrawal_amount(amount)
     user_row = getattr(g, "current_user_row", None) or ()
     user_id = user_row[0] if len(user_row) > 0 else g.current_user.get("user_id")
     wallet_address = user_row[3] if len(user_row) > 3 and user_row[3] else ""
@@ -2023,16 +2030,17 @@ def user_withdrawal_create():
             if not lock_active_user_for_update(user_id):
                 rollback_database()
                 return jsonify({"code":401,"msg":"用户不存在或已停用"}), 401
-            summary = calculate_user_earnings(user_id)
-            if amount > summary["available_earnings"]:
+            summary = calculate_user_earnings(user_id, include_decimal=True)
+            if amount > summary["_available_earnings_decimal"]:
                 rollback_database()
+                summary.pop("_available_earnings_decimal", None)
                 return jsonify({"code":400,"msg":"可提现余额不足","data":summary}), 400
             current_cursor().execute(
                 """
                 insert into withdrawal_request(user_id,wallet_address,amount,status)
                 values(%s,%s,%s,%s)
                 """,
-                (user_id,wallet_address,amount,"pending"),
+                (user_id,wallet_address,amount_for_db,"pending"),
             )
             commit_database()
         except Exception:
@@ -2044,7 +2052,7 @@ def user_withdrawal_create():
         "data":{
             "user_id":user_id,
             "wallet_address":wallet_address,
-            "amount":amount,
+            "amount":amount_for_db,
             "status":"pending",
         },
     })

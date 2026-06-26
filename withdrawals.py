@@ -2,6 +2,7 @@ from decimal import Decimal, InvalidOperation
 
 
 VALID_WITHDRAWAL_STATUSES = {"pending", "approved", "rejected", "paid"}
+MIN_WITHDRAWAL_AMOUNT = Decimal("0.000001")
 VALID_REVIEW_TARGET_STATUSES = {"approved", "rejected", "paid"}
 VALID_STATUS_TRANSITIONS = {
     "pending": {"approved", "rejected"},
@@ -11,16 +12,29 @@ VALID_STATUS_TRANSITIONS = {
 }
 
 
-def validate_withdrawal_amount(amount):
+def parse_withdrawal_amount(amount):
     try:
         value = Decimal(str(amount))
     except (InvalidOperation, TypeError, ValueError):
-        return False, "提现金额格式错误"
+        return None, "提现金额格式错误"
     if not value.is_finite():
-        return False, "提现金额格式错误"
+        return None, "提现金额格式错误"
     if value <= 0:
-        return False, "提现金额必须大于0"
+        return None, "提现金额必须大于0"
+    if value < MIN_WITHDRAWAL_AMOUNT:
+        return None, "提现金额不能小于0.000001"
+    return value.quantize(MIN_WITHDRAWAL_AMOUNT), "ok"
+
+
+def validate_withdrawal_amount(amount):
+    value, message = parse_withdrawal_amount(amount)
+    if value is None:
+        return False, message
     return True, "ok"
+
+
+def format_withdrawal_amount(amount):
+    return format(amount, "f")
 
 
 def validate_review_status(status):

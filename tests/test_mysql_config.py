@@ -147,6 +147,7 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertEqual(withdrawals.validate_withdrawal_amount(0), (False, "提现金额必须大于0"))
         self.assertEqual(withdrawals.validate_withdrawal_amount(float("nan")), (False, "提现金额格式错误"))
         self.assertEqual(withdrawals.validate_withdrawal_amount(float("inf")), (False, "提现金额格式错误"))
+        self.assertEqual(withdrawals.validate_withdrawal_amount("1e-400"), (False, "提现金额不能小于0.000001"))
 
     def test_withdrawal_review_status_validation(self):
         withdrawals = importlib.import_module("withdrawals")
@@ -1396,7 +1397,7 @@ class MysqlConfigTest(unittest.TestCase):
         response = server_main.app.test_client().post(
             "/api/user/withdrawals",
             headers={"Authorization": f"Bearer {token}"},
-            json={"amount": 1.5, "user_id": 999, "wallet_address": "0xevil"},
+            json={"amount": "1.500000", "user_id": 999, "wallet_address": "0xevil"},
         )
 
         self.assertEqual(response.status_code, 200)
@@ -1405,7 +1406,7 @@ class MysqlConfigTest(unittest.TestCase):
             for sql, params in fake_cursor.executed
             if sql.strip().lower().startswith("insert into withdrawal_request")
         ]
-        self.assertEqual(insert_queries[-1][:3], (7, "0xabc", 1.5))
+        self.assertEqual(insert_queries[-1][:3], (7, "0xabc", "1.500000"))
         executed_sql = [sql.lower() for sql, _ in fake_cursor.executed]
         lock_index = next(i for i, sql in enumerate(executed_sql) if "from app_user" in sql and "for update" in sql)
         point_index = next(i for i, sql in enumerate(executed_sql) if "from point_ledger" in sql)
@@ -1452,6 +1453,43 @@ class MysqlConfigTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.get_json()["msg"], "可提现余额不足")
+        self.assertFalse(any(
+            sql.strip().lower().startswith("insert into withdrawal_request")
+            for sql, _ in fake_cursor.executed
+        ))
+
+    def test_user_withdrawal_tiny_amount_returns_400_without_insert(self):
+        auth = importlib.import_module("auth")
+        server_main = load_server_main(SESSION_SECRET="session-secret")
+        token = auth.create_session_token({"user_id": 7, "username": "alice"}, "session-secret")
+
+        class FakeCursor:
+            def __init__(self):
+                self.executed = []
+                self.last_sql = ""
+
+            def execute(self, sql, params=None):
+                self.last_sql = sql
+                self.executed.append((sql, params))
+
+            def fetchone(self):
+                if "from app_user" in self.last_sql.lower():
+                    return (7, "alice", "hash", "0xabc", "active")
+                return None
+
+        fake_cursor = FakeCursor()
+        server_main.cursor = fake_cursor
+        server_main.db = types.SimpleNamespace(commit=lambda: None, rollback=lambda: None)
+        server_main.init_db = lambda: True
+
+        response = server_main.app.test_client().post(
+            "/api/user/withdrawals",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"amount": "1e-400"},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.get_json()["msg"], "提现金额不能小于0.000001")
         self.assertFalse(any(
             sql.strip().lower().startswith("insert into withdrawal_request")
             for sql, _ in fake_cursor.executed
