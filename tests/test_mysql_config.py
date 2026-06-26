@@ -1264,6 +1264,18 @@ class MysqlConfigTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 401)
 
+    def test_user_upload_page_posts_to_user_file_api_with_bearer_token(self):
+        server_main = load_server_main(SESSION_SECRET="session-secret")
+        server_main.init_db = lambda: True
+
+        response = server_main.app.test_client().get("/user/upload")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("/api/user/files", body)
+        self.assertIn("Authorization", body)
+        self.assertIn("user_token", body)
+
     def test_user_files_list_selects_only_current_owner(self):
         auth = importlib.import_module("auth")
         server_main = load_server_main(SESSION_SECRET="session-secret")

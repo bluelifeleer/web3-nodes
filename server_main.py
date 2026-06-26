@@ -1358,10 +1358,87 @@ window.onload = function(){
 </html>
 '''
 
+USER_UPLOAD_HTML = '''
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>用户文件上传</title>
+    <style>
+        body{font-family:Arial,"Microsoft YaHei",sans-serif;max-width:720px;margin:40px auto;padding:0 16px;background:#f7f8fb;color:#1f2937;}
+        form{display:grid;gap:14px;background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:20px;}
+        label{display:grid;gap:6px;font-weight:600;}
+        input,select,button{font-size:15px;padding:10px;border:1px solid #d1d5db;border-radius:6px;}
+        button{background:#2563eb;color:white;border:0;cursor:pointer;}
+        pre{white-space:pre-wrap;background:#111827;color:#e5e7eb;border-radius:8px;padding:16px;}
+        .notice{margin:12px 0;padding:12px;border-radius:6px;background:#fff7ed;border:1px solid #fed7aa;}
+    </style>
+</head>
+<body>
+    <h1>用户文件上传</h1>
+    <div id="loginNotice" class="notice" hidden>未检测到登录 Token，请先登录后再上传。</div>
+    <form id="uploadForm">
+        <label>选择文件
+            <input id="fileInput" name="file" type="file" required>
+        </label>
+        <label>访问权限
+            <select id="visibilityInput" name="visibility">
+                <option value="public">公开</option>
+                <option value="private">私有</option>
+            </select>
+        </label>
+        <button type="submit">上传</button>
+    </form>
+    <pre id="resultBox">等待上传...</pre>
+    <script>
+    const token = localStorage.getItem("user_token") || "";
+    const notice = document.getElementById("loginNotice");
+    const resultBox = document.getElementById("resultBox");
+    if(!token){
+        notice.hidden = false;
+        resultBox.textContent = "缺少 user_token，请先登录。";
+    }
+    document.getElementById("uploadForm").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        if(!token){
+            resultBox.textContent = "缺少 user_token，请先登录。";
+            return;
+        }
+        const file = document.getElementById("fileInput").files[0];
+        const visibility = document.getElementById("visibilityInput").value;
+        const body = new FormData();
+        body.append("file", file);
+        body.append("visibility", visibility);
+        resultBox.textContent = "上传中...";
+        try{
+            const response = await fetch("/api/user/files", {
+                method: "POST",
+                headers: {"Authorization": `Bearer ${token}`},
+                body
+            });
+            const payload = await response.json();
+            const data = payload.data || {};
+            resultBox.textContent = response.ok
+                ? `上传完成\\nfile_hash: ${data.file_hash || ""}\\ndownload_url: ${data.download_url || ""}`
+                : `上传失败\\n${payload.msg || response.statusText}`;
+        }catch(error){
+            resultBox.textContent = `上传失败\\n${error.message}`;
+        }
+    });
+    </script>
+</body>
+</html>
+'''
+
 # 后台首页路由
 @app.route("/")
 def admin_index():
     return render_template_string(ADMIN_HTML)
+
+
+@app.route("/user/upload")
+def user_upload_page():
+    return render_template_string(USER_UPLOAD_HTML)
 
 
 @app.route("/api/health")
