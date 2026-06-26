@@ -11,6 +11,7 @@ import re
 import secrets
 import urllib.parse
 import auth
+import points
 import shares
 from files import USER_FILE_SELECT_PROJECTION, format_user_file_record
 try:
@@ -642,6 +643,117 @@ def select_share_row(share_code):
     limit 1
     """,(share_code,))
     return current_cursor().fetchone()
+
+
+def select_share_download_row(share_code):
+    current_cursor().execute("""
+    select s.share_code,s.file_hash,s.owner_user_id,s.visibility,s.extract_code_hash,
+    s.expires_at,s.max_downloads,s.download_count,s.status,s.created_at,
+    f.file_name,f.ipfs_cid,f.file_size,f.stored_nodes,f.owner_wallet_address
+    from file_share s
+    join file_chain_record f on f.file_hash=s.file_hash and f.deleted_at is null
+    where s.share_code=%s
+    limit 1
+    """,(share_code,))
+    return current_cursor().fetchone()
+
+
+def format_share_download_row(row):
+    return {
+        "share_code": row[0],
+        "file_hash": row[1],
+        "owner_user_id": row[2],
+        "visibility": row[3] or "public",
+        "extract_code_hash": row[4] or "",
+        "expires_at": str(row[5]) if row[5] else "",
+        "max_downloads": row[6] if row[6] is not None else 0,
+        "download_count": row[7] if row[7] is not None else 0,
+        "status": row[8] or "active",
+        "created_at": str(row[9]) if row[9] else "",
+        "file_name": row[10] or "",
+        "ipfs_cid": row[11] or "",
+        "file_size": row[12] if row[12] is not None else 0,
+        "stored_nodes": parse_stored_nodes(row[13]),
+        "owner_wallet_address": row[14] or "",
+    }
+
+
+def request_extract_code():
+    if "extract_code" in request.args:
+        return request.args.get("extract_code", "")
+    data = get_json_body()
+    if "extract_code" in data:
+        return data.get("extract_code", "")
+    return request.form.get("extract_code", "")
+
+
+def optional_downloader_user_id():
+    if not SESSION_SECRET:
+        return None
+    token = get_bearer_token()
+    if not token:
+        return None
+    payload = auth.verify_session_token(token, SESSION_SECRET)
+    if not payload:
+        return None
+    user_id = payload.get("user_id")
+    user_row = select_user_by_id(user_id)
+    if not user_is_active(user_row):
+        return None
+    return user_id
+
+
+def insert_point_ledger(user_id, wallet_address, point_type, amount, source_type, source_id, remark):
+    current_cursor().execute(
+        """
+        insert into point_ledger(user_id,wallet_address,point_type,amount,source_type,source_id,remark)
+        values(%s,%s,%s,%s,%s,%s,%s)
+        """,
+        (user_id,wallet_address,point_type,amount,source_type,source_id,remark),
+    )
+
+
+def record_share_download_success(share, downloader_user_id, downloader_ip):
+    file_hash = share["file_hash"]
+    share_code = share["share_code"]
+    file_size = share["file_size"]
+    stored_nodes = share["stored_nodes"]
+    first_node = stored_nodes[0] if stored_nodes else ""
+    current_cursor().execute(
+        "update file_share set download_count=download_count+1 where share_code=%s",
+        (share_code,),
+    )
+    current_cursor().execute(
+        "update file_chain_record set download_count=download_count+1,last_download_at=%s where file_hash=%s",
+        (datetime.now(),file_hash),
+    )
+    current_cursor().execute(
+        """
+        insert into file_download_log(share_code,file_hash,downloader_ip,downloader_user_id,node_address,file_size)
+        values(%s,%s,%s,%s,%s,%s)
+        """,
+        (share_code,file_hash,downloader_ip,downloader_user_id,first_node,file_size),
+    )
+    insert_point_ledger(
+        share["owner_user_id"],
+        share["owner_wallet_address"],
+        "share_download",
+        points.share_download_points(),
+        "share",
+        share_code,
+        "share download",
+    )
+    node_points = points.node_download_points(file_size)
+    for node in stored_nodes:
+        insert_point_ledger(
+            None,
+            node,
+            "node_download",
+            node_points,
+            "file_download",
+            file_hash,
+            "node download",
+        )
 
 
 def insert_file_share_with_retry(file_hash, owner_user_id, visibility, extract_code_hash, expires_at, max_downloads, status):
@@ -2089,6 +2201,51 @@ def public_share_verify(share_code):
     if code_hash and not shares.verify_extract_code(get_json_body().get("extract_code", ""), code_hash):
         return jsonify({"code":403,"msg":"提取码错误","verified":False}), 403
     return jsonify({"code":200,"verified":True})
+
+
+@app.route("/api/share/<share_code>/download", methods=["GET", "POST"])
+def public_share_download(share_code):
+    if not validate_share_code(share_code):
+        return jsonify({"code":404,"msg":"分享不存在"}), 404
+    row = select_share_download_row(share_code)
+    if not row:
+        return jsonify({"code":404,"msg":"分享不存在"}), 404
+    share = format_share_download_row(row)
+    allowed, status_code, message = shares.validate_share_access(share)
+    if not allowed:
+        return jsonify({"code":status_code,"msg":message}), status_code
+    code_hash = share.get("extract_code_hash") or ""
+    if code_hash and not shares.verify_extract_code(request_extract_code(), code_hash):
+        return jsonify({"code":403,"msg":"提取码错误"}), 403
+
+    downloader_user_id = optional_downloader_user_id()
+    client = get_ipfs_client()
+    try:
+        encrypted = client.cat(share["ipfs_cid"])
+    finally:
+        if hasattr(client, "close"):
+            client.close()
+    try:
+        plain = aes_decrypt(encrypted)
+    except RuntimeError as exc:
+        return jsonify({"code":500,"msg":str(exc)}), 500
+
+    with DatabaseTransaction():
+        try:
+            record_share_download_success(
+                share,
+                downloader_user_id,
+                request.remote_addr or "",
+            )
+            commit_database()
+        except Exception:
+            rollback_database()
+            return jsonify({"code":500,"msg":"下载记录保存失败"}), 500
+
+    filename = share["file_name"] or f"{share['file_hash']}.bin"
+    response = app.response_class(plain, mimetype="application/octet-stream")
+    response.headers["Content-Disposition"] = f"attachment; filename*=UTF-8''{urllib.parse.quote(filename)}"
+    return response
 
 
 # 查询所有上链存证记录

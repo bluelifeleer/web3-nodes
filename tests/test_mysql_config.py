@@ -133,6 +133,13 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertTrue(shares.verify_extract_code("A1b2", code_hash))
         self.assertFalse(shares.verify_extract_code("wrong", code_hash))
 
+    def test_point_helpers_calculate_share_and_node_download_points(self):
+        points = importlib.import_module("points")
+
+        self.assertEqual(points.share_download_points(), 1)
+        self.assertEqual(points.node_download_points(10), 1.0)
+        self.assertEqual(points.points_to_earning_units(250), 2.5)
+
     def test_validate_share_access_rejects_expired_active_share(self):
         shares = importlib.import_module("shares")
         expired_share = {
@@ -2109,6 +2116,156 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertEqual(wrong_response.status_code, 403)
         self.assertEqual(correct_response.status_code, 200)
         self.assertTrue(correct_response.get_json()["verified"])
+
+    def test_share_download_logs_download_and_point_ledger_entries(self):
+        shares = importlib.import_module("shares")
+        auth = importlib.import_module("auth")
+        server_main = load_server_main(SESSION_SECRET="session-secret")
+        now = server_main.datetime.now()
+        share_hash = shares.hash_extract_code("ABCD", salt="fixedsalt")
+        token = auth.create_session_token({"user_id": 9, "username": "bob"}, "session-secret")
+        events = []
+
+        class FakeCursor:
+            def __init__(self):
+                self.executed = []
+                self.last_sql = ""
+
+            def execute(self, sql, params=None):
+                self.last_sql = sql
+                self.executed.append((sql, params))
+
+            def fetchone(self):
+                if "from file_share" in self.last_sql:
+                    return (
+                        "share123",
+                        "f" * 64,
+                        7,
+                        "public",
+                        share_hash,
+                        None,
+                        0,
+                        0,
+                        "active",
+                        now,
+                        "demo.txt",
+                        "cid1",
+                        10,
+                        '["NODE_A", "NODE_B"]',
+                        "0xowner",
+                    )
+                if "from app_user" in self.last_sql:
+                    return (9, "bob", "hash", "0xbob", "active")
+                return None
+
+        class FakeConnection:
+            def get_autocommit(self):
+                return True
+
+            def autocommit(self, value):
+                events.append(("autocommit", value))
+
+            def begin(self):
+                events.append("begin")
+
+            def commit(self):
+                events.append("commit")
+
+            def rollback(self):
+                events.append("rollback")
+
+        class FakeIPFSClient:
+            def cat(self, cid):
+                return b"encrypted"
+
+            def close(self):
+                pass
+
+        fake_cursor = FakeCursor()
+        server_main.cursor = fake_cursor
+        server_main.db = FakeConnection()
+        server_main.init_db = lambda: True
+        server_main.get_ipfs_client = lambda: FakeIPFSClient()
+        server_main.aes_decrypt = lambda data: b"plain-data"
+
+        response = server_main.app.test_client().get(
+            "/api/share/share123/download?extract_code=ABCD",
+            headers={"Authorization": f"Bearer {token}"},
+            environ_base={"REMOTE_ADDR": "203.0.113.9"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data, b"plain-data")
+        statements = [sql.strip().lower() for sql, _ in fake_cursor.executed]
+        joined = "\n".join(statements)
+        self.assertIn("update file_share", joined)
+        self.assertIn("update file_chain_record", joined)
+        self.assertIn("insert into file_download_log", joined)
+        self.assertIn("insert into point_ledger", joined)
+        ledger_params = [
+            params for sql, params in fake_cursor.executed
+            if sql.strip().lower().startswith("insert into point_ledger")
+        ]
+        self.assertEqual(len(ledger_params), 3)
+        self.assertEqual(ledger_params[0][0], 7)
+        self.assertEqual(ledger_params[0][3], 1)
+        self.assertEqual(ledger_params[1][1], "NODE_A")
+        self.assertEqual(ledger_params[1][3], 1.0)
+        log_params = [
+            params for sql, params in fake_cursor.executed
+            if sql.strip().lower().startswith("insert into file_download_log")
+        ][0]
+        self.assertEqual(log_params[0], "share123")
+        self.assertEqual(log_params[3], 9)
+        self.assertEqual(events.count("commit"), 1)
+        self.assertNotIn("rollback", events)
+
+    def test_share_download_blocks_exhausted_share_before_side_effects(self):
+        server_main = load_server_main()
+        now = server_main.datetime.now()
+
+        class FakeCursor:
+            def __init__(self):
+                self.executed = []
+                self.last_sql = ""
+
+            def execute(self, sql, params=None):
+                self.last_sql = sql
+                self.executed.append((sql, params))
+
+            def fetchone(self):
+                if "from file_share" in self.last_sql:
+                    return (
+                        "share123",
+                        "f" * 64,
+                        7,
+                        "public",
+                        "",
+                        None,
+                        1,
+                        1,
+                        "active",
+                        now,
+                        "demo.txt",
+                        "cid1",
+                        10,
+                        '["NODE_A"]',
+                        "0xowner",
+                    )
+                return None
+
+        fake_cursor = FakeCursor()
+        server_main.cursor = fake_cursor
+        server_main.init_db = lambda: True
+
+        response = server_main.app.test_client().get("/api/share/share123/download")
+
+        self.assertEqual(response.status_code, 429)
+        side_effects = [
+            sql for sql, _ in fake_cursor.executed
+            if sql.strip().lower().startswith(("update ", "insert "))
+        ]
+        self.assertEqual(side_effects, [])
 
     def test_filter_file_records_searches_and_paginates(self):
         server_main = load_server_main()
