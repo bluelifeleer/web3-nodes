@@ -1,7 +1,8 @@
-flask
-pymysql
+Flask
+PyMySQL
 requests
 pycryptodome
 ipfshttpclient
 pywebview
 reedsolo
+PyInstaller

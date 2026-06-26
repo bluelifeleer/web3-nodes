@@ -13,90 +13,24 @@ Web3节点激励系统 首次启动全套调试手册（从零跑通）
 - 已安装 IPFS 本地节点（可选，不装也能测试）
 2. 安装依赖（关键）
 打开 CMD / 终端，执行：
-pip install pymysql requests flask pycryptodome ipfshttpclient pywebview reedsolo
-必须三个都装，少一个直接报错。
-也可以直接执行：
 pip install -r requirements.txt
+所有 Python 运行依赖和打包依赖都已维护在 requirements.txt 中。
 第二步：数据库初始化（最容易出错的一步）
 1. 打开数据库工具
 Navicat / SQLyog / MySQL命令行均可
-2. 新建数据库
-数据库名必须严格一致：node_reward
-CREATE DATABASE node_reward DEFAULT CHARACTER SET utf8mb4;
-3. 执行三张表 SQL
-依次执行以下三张表，缺一不可：
-表1：user_node
-CREATE TABLE `user_node` (
-  `id` int NOT NULL AUTO_INCREMENT COMMENT '主键ID',
-  `user_address` varchar(64) NOT NULL COMMENT '用户钱包/用户唯一地址',
-  `invite_code` varchar(32) NOT NULL COMMENT '个人推广码',
-  `parent_invite_code` varchar(32) DEFAULT '' COMMENT '上级推广码（绑定溯源）',
-  `create_time` datetime DEFAULT CURRENT_TIMESTAMP,
-  PRIMARY KEY (`id`),
-  UNIQUE KEY `idx_user_addr` (`user_address`),
-  UNIQUE KEY `idx_invite_code` (`invite_code`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用户节点推广绑定关系';
-表2：node_power
-CREATE TABLE `node_power` (
-  `id` int NOT NULL AUTO_INCREMENT,
-  `user_address` varchar(64) NOT NULL,
-  `node_mac` varchar(64) NOT NULL COMMENT '设备唯一指纹，防多开作弊',
-  `disk_total` float DEFAULT 0 COMMENT '总硬盘容量G',
-  `disk_used` float DEFAULT 0 COMMENT '有效存储占用G',
-  `online_duration` int DEFAULT 0 COMMENT '当日在线时长分钟',
-  `upload_bandwidth` float DEFAULT 0 COMMENT '当日上行流量',
-  `update_time` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  PRIMARY KEY (`id`),
-  UNIQUE KEY `idx_node_mac` (`node_mac`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='节点有效贡献数据';
-表3：node_reward
-CREATE TABLE `node_reward` (
-  `id` int NOT NULL AUTO_INCREMENT,
-  `user_address` varchar(64) NOT NULL,
-  `reward_type` tinyint DEFAULT 1 COMMENT '1本级收益 2上级分成收益',
-  `reward_amount` float DEFAULT 0,
-  `node_contribution` float DEFAULT 0 COMMENT '对应贡献值',
-  `settle_time` datetime DEFAULT CURRENT_TIMESTAMP COMMENT '结算时间',
-  PRIMARY KEY (`id`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='节点收益分成记录';
-表4：file_chain_record
-CREATE TABLE `file_chain_record` (
-  `id` int NOT NULL AUTO_INCREMENT,
-  `file_name` varchar(255) DEFAULT '',
-  `file_hash` varchar(128) NOT NULL COMMENT '文件最终哈希，上链存证',
-  `ipfs_cid` varchar(128) NOT NULL COMMENT 'IPFS唯一CID',
-  `file_size` float DEFAULT 0,
-  `shard_count` int DEFAULT 0 COMMENT '分片数量',
-  `upload_user` varchar(64) DEFAULT '' COMMENT '上传用户节点',
-  `stored_nodes` text COMMENT '保存分片的节点列表',
-  `create_time` datetime DEFAULT CURRENT_TIMESTAMP,
-  PRIMARY KEY (`id`),
-  UNIQUE KEY `idx_file_hash` (`file_hash`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-表5：node_location
-CREATE TABLE `node_location` (
-  `id` int NOT NULL AUTO_INCREMENT,
-  `user_address` varchar(64) NOT NULL COMMENT '节点唯一地址',
-  `node_mac` varchar(64) NOT NULL,
-  `ip_addr` varchar(64) DEFAULT '',
-  `country` varchar(32) DEFAULT '',
-  `province` varchar(32) DEFAULT '',
-  `city` varchar(32) DEFAULT '',
-  `lat` varchar(32) DEFAULT '0',
-  `lng` varchar(32) DEFAULT '0',
-  `online_status` tinyint DEFAULT 1 COMMENT '1在线 0离线',
-  `update_time` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  PRIMARY KEY (`id`),
-  UNIQUE KEY `idx_node_mac` (`node_mac`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='节点地理位置地图数据表';
+2. 执行初始化脚本
+项目已把建库和 5 张表的建表语句整理到 init_mysql.sql，可重复执行：
+mysql -h 172.25.244.60 -P 3306 -u root -p < init_mysql.sql
+脚本会自动创建并切换到数据库：
+web3_modes_store
 第三步：配置服务端数据库连接
-服务端支持用环境变量配置数据库，推荐不要把密码写死在代码里：
-DB_HOST=127.0.0.1
-DB_PORT=3306
-DB_USER=root
-DB_PASSWORD=你的数据库密码
-DB_NAME=node_reward
-如果不配置，默认连接 127.0.0.1:3306 / root / 空密码 / node_reward。
+服务端支持用环境变量配置数据库，优先读取 MYSQL_*，并兼容旧的 DB_*：
+MYSQL_HOST=172.25.244.60
+MYSQL_PORT=3306
+MYSQL_USER=root
+MYSQL_PASSWORD=cjl19880307
+MYSQL_DB_NAME=web3_modes_store
+如果不配置，默认连接 172.25.244.60:3306 / root / cjl19880307 / web3_modes_store。
 数据库不可用时后台首页仍可打开，/api/health 会返回具体数据库错误。
 第四步：启动服务端 & 验证后台是否正常
 1. 运行服务端
@@ -134,9 +68,9 @@ python3 client.py
 报错2：客户端连接失败
 解决：确认8000端口没被占用，服务端正常运行。
 报错3：数据库报错 Unknown database
-解决：没创建 node_reward 数据库。
+解决：没执行 init_mysql.sql，或没有创建 web3_modes_store 数据库。
 报错4：依赖报错 ModuleNotFound
-解决：重新执行 pip install pymysql requests flask
+解决：重新执行 pip install -r requirements.txt
 报错5：IPFS 读取失败
 解决：不影响运行，无IPFS时自动模拟存储数据，可正常测试收益。
 第九步：整套系统成功标准（全部满足即完工）
@@ -154,5 +88,55 @@ python3 client.py
 - 可自定义存储算力权重、分红比例、等级制度
 
 必须运行本地IPFS节点：ipfs daemon
-否则：- 服务端会报错，提示 IPFS 读取失败
-- 客户端会报错，提示 IPFS 未启动    
+否则：
+- 服务端会报错，提示 IPFS 读取失败
+- 客户端会报错，提示 IPFS 未启动
+
+第十一步：不同系统安装 IPFS（Kubo）
+项目会调用本地 IPFS 命令和 API：
+ipfs stats repo --human
+ipfs daemon
+因此推荐安装官方 Kubo 命令行版本。
+
+1. Windows 安装
+打开官方 Kubo 安装文档：
+https://docs.ipfs.tech/install/command-line/
+下载 Windows 版本压缩包，解压后把 ipfs.exe 所在目录加入系统 PATH。
+验证安装：
+ipfs --version
+ipfs init
+ipfs daemon
+
+2. macOS 安装
+推荐使用 Homebrew：
+brew install ipfs
+ipfs --version
+ipfs init
+ipfs daemon
+如果没有 Homebrew，也可以从官方 Kubo 安装文档下载 macOS 压缩包手动安装。
+
+3. Linux 安装
+常见 amd64 服务器可执行：
+wget https://dist.ipfs.tech/kubo/latest/kubo_latest_linux-amd64.tar.gz
+tar -xvzf kubo_latest_linux-amd64.tar.gz
+cd kubo
+sudo bash install.sh
+ipfs --version
+ipfs init
+ipfs daemon
+
+4. Docker 安装
+适合服务器或隔离部署：
+docker run -d --name ipfs_host \
+  -v ipfs_staging:/export \
+  -v ipfs_data:/data/ipfs \
+  -p 4001:4001 \
+  -p 127.0.0.1:5001:5001 \
+  -p 127.0.0.1:8080:8080 \
+  ipfs/kubo:latest
+注意：5001 是 IPFS API 端口，建议只绑定本机 127.0.0.1，不要直接暴露公网。
+
+5. 安装后验证
+保持 ipfs daemon 运行，再新开一个终端执行：
+ipfs stats repo --human
+如果能输出仓库大小，说明客户端可以正常读取 IPFS 状态。

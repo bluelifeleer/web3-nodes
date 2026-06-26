@@ -4,6 +4,7 @@ import hashlib
 import random
 from datetime import datetime
 import pymysql
+import requests
 from flask import Flask, request, jsonify, render_template_string, g
 try:
     from Crypto.Cipher import AES
@@ -22,13 +23,17 @@ app = Flask(__name__)
 
 # ==================== 数据库配置 ====================
 # 可用环境变量覆盖，避免把本机密码写死在代码里：
-# DB_HOST / DB_USER / DB_PASSWORD / DB_NAME / DB_PORT
+# 优先读取 MYSQL_*，兼容旧的 DB_*。
+def get_env(primary_key, legacy_key, default):
+    return os.getenv(primary_key) or os.getenv(legacy_key) or default
+
+
 DB_CONFIG = {
-    "host": os.getenv("DB_HOST", "127.0.0.1"),
-    "user": os.getenv("DB_USER", "root"),
-    "password": os.getenv("DB_PASSWORD", ""),
-    "database": os.getenv("DB_NAME", "node_reward"),
-    "port": int(os.getenv("DB_PORT", "3306")),
+    "host": get_env("MYSQL_HOST", "DB_HOST", "172.25.244.60"),
+    "user": get_env("MYSQL_USER", "DB_USER", "root"),
+    "password": get_env("MYSQL_PASSWORD", "DB_PASSWORD", "cjl19880307"),
+    "database": get_env("MYSQL_DB_NAME", "DB_NAME", "web3_modes_store"),
+    "port": int(get_env("MYSQL_PORT", "DB_PORT", "3306")),
     "charset": "utf8mb4",
     "autocommit": True,
     "connect_timeout": 3,
@@ -64,7 +69,7 @@ def require_database_for_api():
     if not init_db():
         return jsonify({
             "code": 503,
-            "msg": "数据库连接失败，请检查 MySQL 是否启动、库表是否创建、DB_PASSWORD 是否正确",
+            "msg": "数据库连接失败，请检查 MySQL 是否启动、库表是否创建、MYSQL_PASSWORD/DB_PASSWORD 是否正确",
             "error": db_error,
         }), 503
     g.db = db
