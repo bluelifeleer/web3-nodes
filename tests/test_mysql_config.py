@@ -141,6 +141,15 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.content_type, "application/json")
 
+    def test_register_with_json_array_returns_json_400(self):
+        server_main = load_server_main()
+        server_main.init_db = lambda: True
+
+        response = server_main.app.test_client().post("/api/auth/register", json=[1])
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.content_type, "application/json")
+
     def test_register_rejects_duplicate_username(self):
         server_main = load_server_main(SESSION_SECRET="session-secret")
         server_main.init_db = lambda: True
@@ -299,6 +308,15 @@ class MysqlConfigTest(unittest.TestCase):
 
         self.assertFalse(ok)
         self.assertIn("nonce", msg.lower())
+
+    def test_wallet_nonce_with_json_array_returns_json_400(self):
+        server_main = load_server_main()
+        server_main.init_db = lambda: True
+
+        response = server_main.app.test_client().post("/api/wallet/nonce", json=[1])
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.content_type, "application/json")
 
     def test_default_database_engine_is_postgresql(self):
         server_main = load_server_main()

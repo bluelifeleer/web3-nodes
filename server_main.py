@@ -122,7 +122,8 @@ def get_bearer_token():
 
 
 def get_json_body():
-    return request.get_json(silent=True) or {}
+    data = request.get_json(silent=True)
+    return data if isinstance(data, dict) else {}
 
 
 def session_secret_missing_response():
