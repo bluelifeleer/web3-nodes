@@ -2,13 +2,15 @@
 import time
 import hashlib
 import random
-from datetime import datetime
+from datetime import datetime, timedelta
+from functools import wraps
 import requests
 from flask import Flask, request, jsonify, render_template_string, g
 from pathlib import Path
 import re
 import secrets
 import urllib.parse
+import auth
 try:
     from Crypto.Cipher import AES
 except ImportError:
@@ -38,6 +40,7 @@ from db import (
 app = Flask(__name__)
 
 ADMIN_API_TOKEN = os.getenv("ADMIN_API_TOKEN", "")
+SESSION_SECRET = os.getenv("SESSION_SECRET", os.getenv("ADMIN_API_TOKEN", "dev-session-secret"))
 MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_MB", "100")) * 1024 * 1024
 app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_BYTES
 db = None
@@ -66,6 +69,12 @@ def init_db():
 
 def current_cursor():
     return get_current_cursor(cursor)
+
+
+def commit_database():
+    connection = getattr(g, "db", None) or db
+    if hasattr(connection, "commit"):
+        connection.commit()
 
 
 def ensure_database_initialized(sql_path=INIT_SQL_PATH):
@@ -105,6 +114,24 @@ def admin_token_is_valid():
     return secrets.compare_digest(supplied, ADMIN_API_TOKEN)
 
 
+def get_bearer_token():
+    header = request.headers.get("Authorization", "")
+    if header.lower().startswith("bearer "):
+        return header[7:].strip()
+    return request.cookies.get("user_token", "")
+
+
+def require_user(view):
+    @wraps(view)
+    def wrapped(*args, **kwargs):
+        payload = auth.verify_session_token(get_bearer_token(), SESSION_SECRET)
+        if not payload:
+            return jsonify({"code": 401, "msg": "缺少或无效的用户登录 Token"}), 401
+        g.current_user = payload
+        return view(*args, **kwargs)
+    return wrapped
+
+
 @app.before_request
 def require_database_for_api():
     if request.path == "/" or request.path == "/api/health":
@@ -119,6 +146,217 @@ def require_database_for_api():
         }), 503
     g.db = db
     g.cursor = cursor
+
+
+def format_user(row):
+    return {
+        "id": row[0],
+        "username": row[1],
+        "wallet_address": row[3] or "",
+        "status": row[4] or "active",
+    }
+
+
+def select_user_by_username(username):
+    current_cursor().execute(
+        "select id,username,password_hash,wallet_address,status from app_user where username=%s",
+        (username,),
+    )
+    return current_cursor().fetchone()
+
+
+def select_user_by_wallet(wallet_address):
+    current_cursor().execute(
+        "select id,username,password_hash,wallet_address,status from app_user where wallet_address=%s",
+        (wallet_address,),
+    )
+    return current_cursor().fetchone()
+
+
+def select_user_by_id(user_id):
+    current_cursor().execute(
+        "select id,username,password_hash,wallet_address,status from app_user where id=%s",
+        (user_id,),
+    )
+    return current_cursor().fetchone()
+
+
+def create_user_session(user_row):
+    user = format_user(user_row)
+    token = auth.create_session_token(
+        {
+            "user_id": user["id"],
+            "username": user["username"],
+            "wallet_address": user["wallet_address"],
+        },
+        SESSION_SECRET,
+    )
+    return token, user
+
+
+def parse_expiry(value):
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str):
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
+            try:
+                return datetime.strptime(value.split(".")[0], fmt)
+            except ValueError:
+                pass
+    return datetime.min
+
+
+def consume_wallet_nonce(wallet_address, nonce, purpose, signature):
+    wallet_address = auth.normalize_wallet_address(wallet_address)
+    if not wallet_address or not nonce or not signature:
+        return False, "缺少钱包地址、nonce 或签名"
+    current_cursor().execute(
+        """
+        select id,wallet_address,nonce,expires_at,used_at
+        from wallet_nonce
+        where wallet_address=%s and nonce=%s and used_at is null
+        order by created_at desc
+        limit 1
+        """,
+        (wallet_address, nonce),
+    )
+    nonce_row = current_cursor().fetchone()
+    if not nonce_row:
+        return False, "nonce 不存在或已使用"
+    if parse_expiry(nonce_row[3]) < datetime.now():
+        return False, "nonce 已过期"
+    message = auth.build_wallet_message(nonce, purpose)
+    try:
+        recovered = auth.recover_wallet_address(message, signature)
+    except Exception:
+        return False, "钱包签名无效"
+    if recovered != wallet_address:
+        return False, "钱包签名地址不匹配"
+    current_cursor().execute(
+        "update wallet_nonce set used_at=%s where id=%s",
+        (datetime.now(), nonce_row[0]),
+    )
+    return True, ""
+
+
+@app.route("/api/auth/register", methods=["POST"])
+def auth_register():
+    data = request.get_json() or {}
+    username = (data.get("username") or "").strip()
+    password = data.get("password") or ""
+    if not username or not password:
+        return jsonify({"code":400,"msg":"缺少用户名或密码"}), 400
+    if select_user_by_username(username):
+        return jsonify({"code":409,"msg":"用户名已存在"}), 409
+    try:
+        current_cursor().execute(
+            "insert into app_user(username,password_hash) values(%s,%s)",
+            (username, auth.hash_password(password)),
+        )
+        commit_database()
+    except Exception as exc:
+        if "duplicate" in str(exc).lower() or "unique" in str(exc).lower():
+            return jsonify({"code":409,"msg":"用户名已存在"}), 409
+        return jsonify({"code":500,"msg":"用户注册失败"}), 500
+    user_row = select_user_by_username(username)
+    token, user = create_user_session(user_row)
+    return jsonify({"code":200,"msg":"注册成功","token":token,"user":user})
+
+
+@app.route("/api/auth/login", methods=["POST"])
+def auth_login():
+    data = request.get_json() or {}
+    username = (data.get("username") or "").strip()
+    password = data.get("password") or ""
+    if not username or not password:
+        return jsonify({"code":400,"msg":"缺少用户名或密码"}), 400
+    user_row = select_user_by_username(username)
+    if not user_row or not auth.verify_password(password, user_row[2]):
+        return jsonify({"code":401,"msg":"用户名或密码错误"}), 401
+    current_cursor().execute("update app_user set last_login_at=%s where id=%s", (datetime.now(), user_row[0]))
+    commit_database()
+    fresh_user = select_user_by_id(user_row[0]) or user_row
+    token, user = create_user_session(fresh_user)
+    return jsonify({"code":200,"msg":"登录成功","token":token,"user":user})
+
+
+@app.route("/api/auth/me", methods=["GET"])
+@require_user
+def auth_me():
+    user_row = select_user_by_id(g.current_user.get("user_id"))
+    if not user_row:
+        return jsonify({"code":404,"msg":"用户不存在"}), 404
+    return jsonify({"code":200,"user":format_user(user_row)})
+
+
+@app.route("/api/auth/logout", methods=["POST"])
+def auth_logout():
+    response = jsonify({"code":200,"msg":"已退出登录"})
+    response.delete_cookie("user_token")
+    return response
+
+
+@app.route("/api/wallet/nonce", methods=["POST"])
+def wallet_nonce():
+    data = request.get_json() or {}
+    wallet_address = auth.normalize_wallet_address(data.get("wallet_address"))
+    purpose = (data.get("purpose") or "login").strip() or "login"
+    if not wallet_address:
+        return jsonify({"code":400,"msg":"缺少钱包地址"}), 400
+    nonce = secrets.token_urlsafe(24)
+    expires_at = datetime.now() + timedelta(minutes=10)
+    current_cursor().execute(
+        "insert into wallet_nonce(wallet_address,nonce,expires_at) values(%s,%s,%s)",
+        (wallet_address, nonce, expires_at),
+    )
+    commit_database()
+    return jsonify({
+        "code":200,
+        "wallet_address":wallet_address,
+        "nonce":nonce,
+        "purpose":purpose,
+        "message":auth.build_wallet_message(nonce, purpose),
+        "expires_at":expires_at.isoformat(),
+    })
+
+
+@app.route("/api/wallet/bind", methods=["POST"])
+@require_user
+def wallet_bind():
+    data = request.get_json() or {}
+    wallet_address = auth.normalize_wallet_address(data.get("wallet_address"))
+    ok, msg = consume_wallet_nonce(wallet_address, data.get("nonce"), "bind", data.get("signature"))
+    if not ok:
+        return jsonify({"code":401,"msg":msg}), 401
+    try:
+        current_cursor().execute(
+            "update app_user set wallet_address=%s where id=%s",
+            (wallet_address, g.current_user.get("user_id")),
+        )
+        commit_database()
+    except Exception as exc:
+        if "duplicate" in str(exc).lower() or "unique" in str(exc).lower():
+            return jsonify({"code":409,"msg":"钱包地址已绑定其他用户"}), 409
+        return jsonify({"code":500,"msg":"钱包绑定失败"}), 500
+    user_row = select_user_by_id(g.current_user.get("user_id"))
+    return jsonify({"code":200,"msg":"钱包绑定成功","user":format_user(user_row)})
+
+
+@app.route("/api/wallet/login", methods=["POST"])
+def wallet_login():
+    data = request.get_json() or {}
+    wallet_address = auth.normalize_wallet_address(data.get("wallet_address"))
+    ok, msg = consume_wallet_nonce(wallet_address, data.get("nonce"), "login", data.get("signature"))
+    if not ok:
+        return jsonify({"code":401,"msg":msg}), 401
+    user_row = select_user_by_wallet(wallet_address)
+    if not user_row:
+        return jsonify({"code":401,"msg":"钱包地址未绑定用户"}), 401
+    current_cursor().execute("update app_user set last_login_at=%s where id=%s", (datetime.now(), user_row[0]))
+    commit_database()
+    fresh_user = select_user_by_id(user_row[0]) or user_row
+    token, user = create_user_session(fresh_user)
+    return jsonify({"code":200,"msg":"登录成功","token":token,"user":user})
 
 # ==================== 全局分成配置（开发者后台可改） ====================
 SELF_RATIO = 0.15    # 上级分成比例15%

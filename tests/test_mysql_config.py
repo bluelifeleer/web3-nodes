@@ -14,6 +14,7 @@ ENV_KEYS = (
     "POSTGRES_PASSWORD",
     "POSTGRES_DB_NAME",
     "ADMIN_API_TOKEN",
+    "SESSION_SECRET",
     "MAX_UPLOAD_MB",
     "AES_KEY",
     "MYSQL_HOST",
@@ -87,6 +88,45 @@ def load_server_main(**env):
 
 
 class MysqlConfigTest(unittest.TestCase):
+    def test_password_hash_verification_accepts_correct_password(self):
+        auth = importlib.import_module("auth")
+
+        password_hash = auth.hash_password("secret-pass")
+
+        self.assertNotEqual(password_hash, "secret-pass")
+        self.assertTrue(auth.verify_password("secret-pass", password_hash))
+        self.assertFalse(auth.verify_password("wrong-pass", password_hash))
+
+    def test_session_token_round_trip(self):
+        auth = importlib.import_module("auth")
+
+        token = auth.create_session_token({"user_id": 7, "username": "alice"}, "test-secret")
+        payload = auth.verify_session_token(token, "test-secret")
+
+        self.assertEqual(payload["user_id"], 7)
+        self.assertEqual(payload["username"], "alice")
+
+    def test_wallet_login_message_contains_nonce_and_purpose(self):
+        auth = importlib.import_module("auth")
+
+        message = auth.build_wallet_message("abc123", "login")
+
+        self.assertIn("abc123", message)
+        self.assertIn("login", message)
+        self.assertIn("Web3 Nodes", message)
+
+    def test_register_rejects_missing_username(self):
+        server_main = load_server_main()
+        server_main.init_db = lambda: True
+        response = server_main.app.test_client().post("/api/auth/register", json={"password": "pw"})
+        self.assertEqual(response.status_code, 400)
+
+    def test_auth_me_requires_user_token(self):
+        server_main = load_server_main()
+        server_main.init_db = lambda: True
+        response = server_main.app.test_client().get("/api/auth/me")
+        self.assertEqual(response.status_code, 401)
+
     def test_default_database_engine_is_postgresql(self):
         server_main = load_server_main()
 

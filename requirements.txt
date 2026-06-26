@@ -7,3 +7,4 @@ ipfshttpclient
 pywebview
 reedsolo
 PyInstaller
+eth-account
