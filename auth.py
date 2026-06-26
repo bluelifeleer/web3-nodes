@@ -21,9 +21,11 @@ def hash_password(password, salt=None):
 
 
 def verify_password(password, password_hash):
+    if not isinstance(password_hash, str):
+        return False
     try:
         algorithm, salt, expected = password_hash.split("$", 2)
-    except ValueError:
+    except (AttributeError, ValueError):
         return False
     if algorithm != "pbkdf2_sha256":
         return False

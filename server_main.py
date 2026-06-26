@@ -306,13 +306,13 @@ def auth_login():
     password = data.get("password") or ""
     if not username or not password:
         return jsonify({"code":400,"msg":"缺少用户名或密码"}), 400
+    if not SESSION_SECRET:
+        return session_secret_missing_response()
     user_row = select_user_by_username(username)
     if not user_row or not auth.verify_password(password, user_row[2]):
         return jsonify({"code":401,"msg":"用户名或密码错误"}), 401
     if not user_is_active(user_row):
         return jsonify({"code":401,"msg":"用户名或密码错误"}), 401
-    if not SESSION_SECRET:
-        return session_secret_missing_response()
     current_cursor().execute("update app_user set last_login_at=%s where id=%s", (datetime.now(), user_row[0]))
     commit_database()
     fresh_user = select_user_by_id(user_row[0]) or user_row

@@ -97,6 +97,12 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertTrue(auth.verify_password("secret-pass", password_hash))
         self.assertFalse(auth.verify_password("wrong-pass", password_hash))
 
+    def test_password_verification_rejects_corrupted_hashes(self):
+        auth = importlib.import_module("auth")
+
+        self.assertFalse(auth.verify_password("secret-pass", None))
+        self.assertFalse(auth.verify_password("secret-pass", "not-a-valid-hash"))
+
     def test_session_token_round_trip(self):
         auth = importlib.import_module("auth")
 
@@ -206,6 +212,33 @@ class MysqlConfigTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 503)
         self.assertEqual(response.content_type, "application/json")
+
+    def test_login_without_session_secret_does_not_reveal_password_validity(self):
+        auth = importlib.import_module("auth")
+        server_main = load_server_main()
+        server_main.init_db = lambda: True
+        server_main.select_user_by_username = lambda username: (
+            1,
+            username,
+            auth.hash_password("correct-pass"),
+            None,
+            "active",
+        )
+        client = server_main.app.test_client()
+
+        valid_response = client.post(
+            "/api/auth/login",
+            json={"username": "alice", "password": "correct-pass"},
+        )
+        invalid_response = client.post(
+            "/api/auth/login",
+            json={"username": "alice", "password": "wrong-pass"},
+        )
+
+        self.assertEqual(valid_response.status_code, 503)
+        self.assertEqual(invalid_response.status_code, 503)
+        self.assertEqual(valid_response.content_type, "application/json")
+        self.assertEqual(invalid_response.content_type, "application/json")
 
     def test_login_does_not_use_admin_api_token_as_session_secret(self):
         auth = importlib.import_module("auth")
