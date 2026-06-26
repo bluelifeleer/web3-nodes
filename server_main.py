@@ -13,6 +13,7 @@ import urllib.parse
 import auth
 import points
 import shares
+import withdrawals
 from files import USER_FILE_SELECT_PROJECTION, format_user_file_record
 try:
     from Crypto.Cipher import AES
@@ -171,7 +172,7 @@ ADMIN_PROTECTED_PATHS = {
 
 
 def is_admin_protected_path(path):
-    return path in ADMIN_PROTECTED_PATHS
+    return path in ADMIN_PROTECTED_PATHS or path.startswith("/api/admin/")
 
 
 def admin_token_is_valid():
@@ -711,6 +712,65 @@ def insert_point_ledger(user_id, wallet_address, point_type, amount, source_type
         """,
         (user_id,wallet_address,point_type,amount,source_type,source_id,remark),
     )
+
+
+def numeric_cell(row, index=0):
+    if not row or row[index] is None:
+        return 0.0
+    return float(row[index])
+
+
+def format_withdrawal_row(row):
+    return {
+        "id": row[0],
+        "user_id": row[1],
+        "wallet_address": row[2] or "",
+        "amount": float(row[3] or 0),
+        "status": row[4] or "pending",
+        "admin_note": row[5] or "",
+        "created_at": str(row[6]) if len(row) > 6 and row[6] else "",
+        "reviewed_at": str(row[7]) if len(row) > 7 and row[7] else "",
+    }
+
+
+def format_point_ledger_row(row):
+    return {
+        "id": row[0],
+        "user_id": row[1],
+        "wallet_address": row[2] or "",
+        "point_type": row[3] or "",
+        "amount": float(row[4] or 0),
+        "source_type": row[5] or "",
+        "source_id": row[6] or "",
+        "remark": row[7] or "",
+        "created_at": str(row[8]) if len(row) > 8 and row[8] else "",
+    }
+
+
+def calculate_user_earnings(user_id):
+    active_cursor = current_cursor()
+    active_cursor.execute(
+        "select coalesce(sum(amount),0) from point_ledger where user_id=%s",
+        (user_id,),
+    )
+    total_points = numeric_cell(active_cursor.fetchone())
+    total_earnings = points.points_to_earning_units(total_points)
+    active_cursor.execute(
+        """
+        select coalesce(sum(amount),0)
+        from withdrawal_request
+        where user_id=%s and status in ('pending','approved','paid')
+        """,
+        (user_id,),
+    )
+    locked_withdrawals = numeric_cell(active_cursor.fetchone())
+    available_earnings = max(total_earnings - locked_withdrawals, 0.0)
+    return {
+        "total_points": total_points,
+        "total_earnings": total_earnings,
+        "locked_withdrawals": locked_withdrawals,
+        "available_earnings": available_earnings,
+    }
 
 
 def atomic_increment_share_download_count(share_code):
@@ -1881,6 +1941,204 @@ def api_upload_file():
             "access_token":access_token,
             "download_url":f"/api/file_download/{real_file_hash}" + (f"?token={access_token}" if access_token else "")
         }
+    })
+
+
+@app.route("/api/user/earnings", methods=["GET"])
+@require_user
+def user_earnings():
+    summary = calculate_user_earnings(g.current_user.get("user_id"))
+    return jsonify({"code":200,"data":summary})
+
+
+@app.route("/api/user/points", methods=["GET"])
+@require_user
+def user_points():
+    user_id = g.current_user.get("user_id")
+    current_cursor().execute(
+        """
+        select id,user_id,wallet_address,point_type,amount,source_type,source_id,remark,created_at
+        from point_ledger
+        where user_id=%s
+        order by created_at desc,id desc
+        """,
+        (user_id,),
+    )
+    rows = current_cursor().fetchall()
+    total_points = sum(float(row[4] or 0) for row in rows)
+    return jsonify({
+        "code":200,
+        "data":{
+            "total_points":total_points,
+            "total_earnings":points.points_to_earning_units(total_points),
+            "items":[format_point_ledger_row(row) for row in rows],
+        },
+    })
+
+
+@app.route("/api/user/withdrawals", methods=["GET"])
+@require_user
+def user_withdrawal_list():
+    user_id = g.current_user.get("user_id")
+    current_cursor().execute(
+        """
+        select id,user_id,wallet_address,amount,status,admin_note,created_at,reviewed_at
+        from withdrawal_request
+        where user_id=%s
+        order by created_at desc,id desc
+        """,
+        (user_id,),
+    )
+    return jsonify({
+        "code":200,
+        "data":[format_withdrawal_row(row) for row in current_cursor().fetchall()],
+    })
+
+
+@app.route("/api/user/withdrawals", methods=["POST"])
+@require_user
+def user_withdrawal_create():
+    data = get_json_body()
+    ok, message = withdrawals.validate_withdrawal_amount(data.get("amount"))
+    if not ok:
+        return jsonify({"code":400,"msg":message}), 400
+    amount = float(data.get("amount"))
+    user_row = getattr(g, "current_user_row", None) or ()
+    user_id = user_row[0] if len(user_row) > 0 else g.current_user.get("user_id")
+    wallet_address = user_row[3] if len(user_row) > 3 and user_row[3] else ""
+    if not wallet_address:
+        return jsonify({"code":400,"msg":"请先绑定钱包地址"}), 400
+
+    with DatabaseTransaction():
+        try:
+            summary = calculate_user_earnings(user_id)
+            if amount > summary["available_earnings"]:
+                rollback_database()
+                return jsonify({"code":400,"msg":"可提现余额不足","data":summary}), 400
+            current_cursor().execute(
+                """
+                insert into withdrawal_request(user_id,wallet_address,amount,status)
+                values(%s,%s,%s,%s)
+                """,
+                (user_id,wallet_address,amount,"pending"),
+            )
+            commit_database()
+        except Exception:
+            rollback_database()
+            return jsonify({"code":500,"msg":"提现申请创建失败"}), 500
+    return jsonify({
+        "code":200,
+        "msg":"提现申请已提交",
+        "data":{
+            "user_id":user_id,
+            "wallet_address":wallet_address,
+            "amount":amount,
+            "status":"pending",
+        },
+    })
+
+
+@app.route("/api/admin/withdrawals", methods=["GET"])
+def admin_withdrawal_list():
+    current_cursor().execute(
+        """
+        select id,user_id,wallet_address,amount,status,admin_note,created_at,reviewed_at
+        from withdrawal_request
+        order by created_at desc,id desc
+        """
+    )
+    return jsonify({
+        "code":200,
+        "data":[format_withdrawal_row(row) for row in current_cursor().fetchall()],
+    })
+
+
+@app.route("/api/admin/withdrawals/<int:withdrawal_id>/review", methods=["POST"])
+def admin_withdrawal_review(withdrawal_id):
+    data = get_json_body()
+    status = str(data.get("status") or "").strip().lower()
+    ok, message = withdrawals.validate_review_status(status)
+    if not ok:
+        return jsonify({"code":400,"msg":message}), 400
+    admin_note = str(data.get("admin_note") or "")[:255]
+    active_cursor = current_cursor()
+    active_cursor.execute(
+        """
+        update withdrawal_request
+        set status=%s,admin_note=%s,reviewed_at=%s
+        where id=%s
+        """,
+        (status,admin_note,datetime.now(),withdrawal_id),
+    )
+    if getattr(active_cursor, "rowcount", None) == 0:
+        rollback_database()
+        return jsonify({"code":404,"msg":"提现申请不存在"}), 404
+    commit_database()
+    return jsonify({"code":200,"msg":"提现审核已更新","data":{"id":withdrawal_id,"status":status}})
+
+
+@app.route("/api/admin/users", methods=["GET"])
+def admin_user_list():
+    current_cursor().execute(
+        """
+        select id,username,password_hash,wallet_address,status
+        from app_user
+        order by id desc
+        """
+    )
+    return jsonify({"code":200,"data":[format_user(row) for row in current_cursor().fetchall()]})
+
+
+@app.route("/api/admin/shares", methods=["GET"])
+def admin_share_list():
+    current_cursor().execute(f"""
+    select {shares.SHARE_SELECT_PROJECTION}
+    from file_share s
+    join file_chain_record f on f.file_hash=s.file_hash and f.deleted_at is null
+    order by s.created_at desc
+    """)
+    return jsonify({
+        "code":200,
+        "data":[shares.format_share_row(row) for row in current_cursor().fetchall()],
+    })
+
+
+@app.route("/api/admin/downloads", methods=["GET"])
+def admin_download_list():
+    current_cursor().execute(
+        """
+        select id,share_code,file_hash,downloader_ip,downloader_user_id,node_address,file_size,created_at
+        from file_download_log
+        order by created_at desc,id desc
+        """
+    )
+    downloads = []
+    for row in current_cursor().fetchall():
+        downloads.append({
+            "id":row[0],
+            "share_code":row[1] or "",
+            "file_hash":row[2] or "",
+            "downloader_ip":row[3] or "",
+            "downloader_user_id":row[4],
+            "node_address":row[5] or "",
+            "file_size":float(row[6] or 0),
+            "created_at":str(row[7]) if len(row) > 7 and row[7] else "",
+        })
+    return jsonify({"code":200,"data":downloads})
+
+
+@app.route("/api/admin/points", methods=["GET"])
+def admin_point_list():
+    current_cursor().execute(
+        """
+        select id,user_id,wallet_address,point_type,amount,source_type,source_id,remark,created_at
+        from point_ledger
+        order by created_at desc,id desc
+        """
+    )
+    return jsonify({
+        "code":200,
+        "data":[format_point_ledger_row(row) for row in current_cursor().fetchall()],
     })
 
 
