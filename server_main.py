@@ -72,16 +72,74 @@ def current_cursor():
     return get_current_cursor(cursor)
 
 
+def active_database_connection():
+    return getattr(g, "db", None) or db
+
+
 def commit_database():
-    connection = getattr(g, "db", None) or db
+    connection = active_database_connection()
     if hasattr(connection, "commit"):
         connection.commit()
 
 
 def rollback_database():
-    connection = getattr(g, "db", None) or db
+    connection = active_database_connection()
     if hasattr(connection, "rollback"):
         connection.rollback()
+
+
+class DatabaseTransaction:
+    def __init__(self):
+        self.connection = None
+        self.previous_autocommit = None
+        self.restore_style = None
+
+    def __enter__(self):
+        self.connection = active_database_connection()
+        if self.connection is None:
+            return self
+        get_autocommit = getattr(self.connection, "get_autocommit", None)
+        set_autocommit = getattr(self.connection, "autocommit", None)
+        if callable(get_autocommit) and callable(set_autocommit):
+            self.previous_autocommit = get_autocommit()
+            self.restore_style = "method"
+            if self.previous_autocommit:
+                set_autocommit(False)
+        elif hasattr(self.connection, "autocommit"):
+            self.previous_autocommit = getattr(self.connection, "autocommit")
+            self.restore_style = "attribute"
+            if self.previous_autocommit:
+                setattr(self.connection, "autocommit", False)
+        begin = getattr(self.connection, "begin", None)
+        if callable(begin):
+            begin()
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        if self.connection is None or self.restore_style is None:
+            return False
+        if self.restore_style == "method":
+            self.connection.autocommit(self.previous_autocommit)
+        elif self.restore_style == "attribute":
+            setattr(self.connection, "autocommit", self.previous_autocommit)
+        return False
+
+
+def duplicate_database_error(exc):
+    text = " ".join(str(part) for part in (exc.__class__.__name__, exc))
+    text = text.lower()
+    return any(
+        marker in text
+        for marker in (
+            "duplicate entry",
+            "duplicate key",
+            "unique constraint",
+            "unique violation",
+            "integrityerror",
+            "sqlstate 23505",
+            "1062",
+        )
+    )
 
 
 def ensure_database_initialized(sql_path=INIT_SQL_PATH):
@@ -1600,30 +1658,36 @@ def user_file_upload():
         return jsonify({"code":400,"msg":"IPFS节点未启动"}), 400
 
     assign_nodes = get_backup_nodes()
-    try:
-        current_cursor().execute('''
-        insert into file_chain_record(file_name,file_hash,ipfs_cid,file_size,shard_count,upload_user,stored_nodes,visibility,access_token,owner_user_id,owner_wallet_address)
-        values(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-        ''',(
-            uploaded_file.filename,
-            real_file_hash,
-            cid,
-            round(len(file_data)/1024/1024,3),
-            shard_num,
-            upload_user,
-            json.dumps(assign_nodes, ensure_ascii=False),
-            visibility,
-            access_token,
-            owner_user_id,
-            owner_wallet_address,
-        ))
+    with DatabaseTransaction():
+        try:
+            current_cursor().execute('''
+            insert into file_chain_record(file_name,file_hash,ipfs_cid,file_size,shard_count,upload_user,stored_nodes,visibility,access_token,owner_user_id,owner_wallet_address)
+            values(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            ''',(
+                uploaded_file.filename,
+                real_file_hash,
+                cid,
+                round(len(file_data)/1024/1024,3),
+                shard_num,
+                upload_user,
+                json.dumps(assign_nodes, ensure_ascii=False),
+                visibility,
+                access_token,
+                owner_user_id,
+                owner_wallet_address,
+            ))
 
-        for node in assign_nodes:
-            current_cursor().execute('update node_power set disk_used=disk_used+0.1 where user_address=%s',(node,))
-        commit_database()
-    except Exception:
-        rollback_database()
-        return jsonify({"code":500,"msg":"文件记录保存失败"}), 500
+            for node in assign_nodes:
+                current_cursor().execute('update node_power set disk_used=disk_used+0.1 where user_address=%s',(node,))
+            commit_database()
+        except Exception as exc:
+            rollback_database()
+            if duplicate_database_error(exc):
+                return jsonify({
+                    "code":409,
+                    "msg":"文件已存在，当前版本暂不支持重复上传",
+                }), 409
+            return jsonify({"code":500,"msg":"文件记录保存失败"}), 500
 
     return jsonify({
         "code":200,

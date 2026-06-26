@@ -1444,6 +1444,150 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertEqual(response.content_type, "application/json")
         self.assertTrue(rolled_back)
 
+    def test_user_file_upload_uses_transaction_and_restores_autocommit(self):
+        auth = importlib.import_module("auth")
+        server_main = load_server_main(SESSION_SECRET="session-secret")
+        token = auth.create_session_token({"user_id": 7, "username": "alice"}, "session-secret")
+        new_hash = "c" * 64
+
+        class FakeCursor:
+            def __init__(self):
+                self.last_sql = ""
+
+            def execute(self, sql, params=None):
+                self.last_sql = sql
+
+            def fetchone(self):
+                if "from app_user" in self.last_sql:
+                    return (7, "alice", "hash", "0xabc", "active")
+                if "from file_chain_record" in self.last_sql:
+                    return None
+                return None
+
+        class FakeConnection:
+            def __init__(self):
+                self.autocommit_state = True
+                self.events = []
+
+            def get_autocommit(self):
+                self.events.append(("get_autocommit", self.autocommit_state))
+                return self.autocommit_state
+
+            def autocommit(self, value):
+                self.autocommit_state = value
+                self.events.append(("autocommit", value))
+
+            def commit(self):
+                self.events.append(("commit", self.autocommit_state))
+
+            def rollback(self):
+                self.events.append(("rollback", self.autocommit_state))
+
+        class FakeIPFSClient:
+            def add_bytes(self, data):
+                return "cid"
+
+            def close(self):
+                pass
+
+        fake_db = FakeConnection()
+        server_main.cursor = FakeCursor()
+        server_main.db = fake_db
+        server_main.init_db = lambda: True
+        server_main.aes_encrypt = lambda data: b"encrypted"
+        server_main.file_shard = lambda data: [data]
+        server_main.get_file_hash = lambda data: new_hash
+        server_main.get_backup_nodes = lambda: ["NODE_A"]
+        server_main.get_ipfs_client = lambda: FakeIPFSClient()
+
+        response = server_main.app.test_client().post(
+            "/api/user/files",
+            headers={"Authorization": f"Bearer {token}"},
+            data={"file": (io.BytesIO(b"plain"), "demo.txt")},
+            content_type="multipart/form-data",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(("autocommit", False), fake_db.events)
+        self.assertIn(("commit", False), fake_db.events)
+        self.assertEqual(fake_db.events[-1], ("autocommit", True))
+
+    def test_user_file_upload_duplicate_insert_failure_returns_409(self):
+        auth = importlib.import_module("auth")
+        server_main = load_server_main(SESSION_SECRET="session-secret")
+        token = auth.create_session_token({"user_id": 7, "username": "alice"}, "session-secret")
+        duplicate_hash = "d" * 64
+        rolled_back = []
+
+        class FakeCursor:
+            def __init__(self):
+                self.last_sql = ""
+                self.insert_seen = False
+
+            def execute(self, sql, params=None):
+                self.last_sql = sql
+                if sql.strip().lower().startswith("insert into file_chain_record"):
+                    self.insert_seen = True
+                    raise Exception("Duplicate entry 'hash' for key 'file_hash'")
+                if sql.strip().lower().startswith("update node_power"):
+                    raise AssertionError("node updates should not run after duplicate insert")
+
+            def fetchone(self):
+                if "from app_user" in self.last_sql:
+                    return (7, "alice", "hash", "0xabc", "active")
+                if "from file_chain_record" in self.last_sql:
+                    return None
+                return None
+
+        class FakeConnection:
+            def __init__(self):
+                self.autocommit_state = True
+                self.events = []
+
+            def get_autocommit(self):
+                self.events.append(("get_autocommit", self.autocommit_state))
+                return self.autocommit_state
+
+            def autocommit(self, value):
+                self.autocommit_state = value
+                self.events.append(("autocommit", value))
+
+            def commit(self):
+                raise AssertionError("commit should not happen after duplicate insert")
+
+            def rollback(self):
+                self.events.append(("rollback", self.autocommit_state))
+                rolled_back.append(True)
+
+        class FakeIPFSClient:
+            def add_bytes(self, data):
+                return "cid"
+
+            def close(self):
+                pass
+
+        server_main.cursor = FakeCursor()
+        server_main.db = FakeConnection()
+        server_main.init_db = lambda: True
+        server_main.aes_encrypt = lambda data: b"encrypted"
+        server_main.file_shard = lambda data: [data]
+        server_main.get_file_hash = lambda data: duplicate_hash
+        server_main.get_backup_nodes = lambda: ["NODE_A"]
+        server_main.get_ipfs_client = lambda: FakeIPFSClient()
+
+        response = server_main.app.test_client().post(
+            "/api/user/files",
+            headers={"Authorization": f"Bearer {token}"},
+            data={"file": (io.BytesIO(b"plain"), "demo.txt")},
+            content_type="multipart/form-data",
+        )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.content_type, "application/json")
+        self.assertIn("文件已存在", response.get_json()["msg"])
+        self.assertTrue(rolled_back)
+        self.assertEqual(server_main.db.events[-2:], [("rollback", False), ("autocommit", True)])
+
     def test_user_file_detail_and_delete_reject_malformed_hash(self):
         auth = importlib.import_module("auth")
         server_main = load_server_main(SESSION_SECRET="session-secret")
