@@ -486,6 +486,30 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.content_type, "application/json")
 
+    def test_wallet_nonce_with_numeric_wallet_address_returns_json_400(self):
+        server_main = load_server_main()
+        server_main.init_db = lambda: True
+
+        response = server_main.app.test_client().post(
+            "/api/wallet/nonce",
+            json={"wallet_address": 123},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.content_type, "application/json")
+
+    def test_wallet_nonce_with_numeric_purpose_returns_json_400(self):
+        server_main = load_server_main()
+        server_main.init_db = lambda: True
+
+        response = server_main.app.test_client().post(
+            "/api/wallet/nonce",
+            json={"wallet_address": "0xabc", "purpose": 123},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.content_type, "application/json")
+
     def test_wallet_login_missing_fields_return_json_400(self):
         server_main = load_server_main(SESSION_SECRET="session-secret")
         server_main.init_db = lambda: True
@@ -498,6 +522,18 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertEqual(array_response.content_type, "application/json")
         self.assertEqual(partial_response.status_code, 400)
         self.assertEqual(partial_response.content_type, "application/json")
+
+    def test_wallet_login_numeric_wallet_address_returns_json_400(self):
+        server_main = load_server_main(SESSION_SECRET="session-secret")
+        server_main.init_db = lambda: True
+
+        response = server_main.app.test_client().post(
+            "/api/wallet/login",
+            json={"wallet_address": 123, "nonce": "nonce1", "signature": "sig"},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.content_type, "application/json")
 
     def test_wallet_bind_missing_fields_return_json_400(self):
         auth = importlib.import_module("auth")
@@ -528,6 +564,28 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertEqual(array_response.content_type, "application/json")
         self.assertEqual(partial_response.status_code, 400)
         self.assertEqual(partial_response.content_type, "application/json")
+
+    def test_wallet_bind_numeric_wallet_address_returns_json_400(self):
+        auth = importlib.import_module("auth")
+        server_main = load_server_main(SESSION_SECRET="session-secret")
+        server_main.init_db = lambda: True
+        token = auth.create_session_token({"user_id": 7, "username": "alice"}, "session-secret")
+        server_main.select_user_by_id = lambda user_id: (
+            user_id,
+            "alice",
+            "hash",
+            "",
+            "active",
+        )
+
+        response = server_main.app.test_client().post(
+            "/api/wallet/bind",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"wallet_address": 123, "nonce": "nonce1", "signature": "sig"},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.content_type, "application/json")
 
     def test_wallet_login_invalid_nonce_returns_json_400(self):
         server_main = load_server_main(SESSION_SECRET="session-secret")

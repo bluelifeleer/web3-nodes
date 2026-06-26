@@ -84,7 +84,9 @@ def build_wallet_message(nonce, purpose):
 
 
 def normalize_wallet_address(address):
-    return (address or "").strip().lower()
+    if not isinstance(address, str):
+        return ""
+    return address.strip().lower()
 
 
 def recover_wallet_address(message, signature):
