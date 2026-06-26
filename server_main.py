@@ -713,16 +713,29 @@ def insert_point_ledger(user_id, wallet_address, point_type, amount, source_type
     )
 
 
+def atomic_increment_share_download_count(share_code):
+    current_cursor().execute(
+        """
+        update file_share
+        set download_count=download_count+1
+        where share_code=%s
+        and status='active'
+        and (expires_at is null or expires_at>%s)
+        and (max_downloads=0 or download_count < max_downloads)
+        """,
+        (share_code,datetime.now()),
+    )
+    return getattr(current_cursor(), "rowcount", None) != 0
+
+
 def record_share_download_success(share, downloader_user_id, downloader_ip):
     file_hash = share["file_hash"]
     share_code = share["share_code"]
     file_size = share["file_size"]
     stored_nodes = share["stored_nodes"]
     first_node = stored_nodes[0] if stored_nodes else ""
-    current_cursor().execute(
-        "update file_share set download_count=download_count+1 where share_code=%s",
-        (share_code,),
-    )
+    if not atomic_increment_share_download_count(share_code):
+        return False
     current_cursor().execute(
         "update file_chain_record set download_count=download_count+1,last_download_at=%s where file_hash=%s",
         (datetime.now(),file_hash),
@@ -754,6 +767,7 @@ def record_share_download_success(share, downloader_user_id, downloader_ip):
             file_hash,
             "node download",
         )
+    return True
 
 
 def insert_file_share_with_retry(file_hash, owner_user_id, visibility, extract_code_hash, expires_at, max_downloads, status):
@@ -2221,7 +2235,10 @@ def public_share_download(share_code):
     downloader_user_id = optional_downloader_user_id()
     client = get_ipfs_client()
     try:
-        encrypted = client.cat(share["ipfs_cid"])
+        try:
+            encrypted = client.cat(share["ipfs_cid"])
+        except Exception:
+            return jsonify({"code":502,"msg":"IPFS文件读取失败"}), 502
     finally:
         if hasattr(client, "close"):
             client.close()
@@ -2232,11 +2249,14 @@ def public_share_download(share_code):
 
     with DatabaseTransaction():
         try:
-            record_share_download_success(
+            recorded = record_share_download_success(
                 share,
                 downloader_user_id,
                 request.remote_addr or "",
             )
+            if not recorded:
+                rollback_database()
+                return jsonify({"code":409,"msg":"分享状态已变化，请重试"}), 409
             commit_database()
         except Exception:
             rollback_database()
