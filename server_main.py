@@ -274,8 +274,12 @@ def wallet_fields_missing(data):
 @app.route("/api/auth/register", methods=["POST"])
 def auth_register():
     data = get_json_body()
-    username = (data.get("username") or "").strip()
-    password = data.get("password") or ""
+    raw_username = data.get("username")
+    raw_password = data.get("password")
+    if not isinstance(raw_username, str) or not isinstance(raw_password, str):
+        return jsonify({"code":400,"msg":"缺少用户名或密码"}), 400
+    username = raw_username.strip()
+    password = raw_password
     if not username or not password:
         return jsonify({"code":400,"msg":"缺少用户名或密码"}), 400
     if not SESSION_SECRET:
@@ -302,8 +306,12 @@ def auth_register():
 @app.route("/api/auth/login", methods=["POST"])
 def auth_login():
     data = get_json_body()
-    username = (data.get("username") or "").strip()
-    password = data.get("password") or ""
+    raw_username = data.get("username")
+    raw_password = data.get("password")
+    if not isinstance(raw_username, str) or not isinstance(raw_password, str):
+        return jsonify({"code":400,"msg":"缺少用户名或密码"}), 400
+    username = raw_username.strip()
+    password = raw_password
     if not username or not password:
         return jsonify({"code":400,"msg":"缺少用户名或密码"}), 400
     if not SESSION_SECRET:

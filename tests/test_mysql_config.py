@@ -156,6 +156,18 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.content_type, "application/json")
 
+    def test_register_with_numeric_password_returns_json_400(self):
+        server_main = load_server_main(SESSION_SECRET="session-secret")
+        server_main.init_db = lambda: True
+
+        response = server_main.app.test_client().post(
+            "/api/auth/register",
+            json={"username": "alice", "password": 123},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.content_type, "application/json")
+
     def test_register_rejects_duplicate_username(self):
         server_main = load_server_main(SESSION_SECRET="session-secret")
         server_main.init_db = lambda: True
@@ -192,6 +204,18 @@ class MysqlConfigTest(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 401)
+
+    def test_login_with_numeric_password_returns_json_400(self):
+        server_main = load_server_main(SESSION_SECRET="session-secret")
+        server_main.init_db = lambda: True
+
+        response = server_main.app.test_client().post(
+            "/api/auth/login",
+            json={"username": "alice", "password": 123},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.content_type, "application/json")
 
     def test_login_fails_safely_without_session_secret(self):
         auth = importlib.import_module("auth")
