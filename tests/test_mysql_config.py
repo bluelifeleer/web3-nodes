@@ -281,6 +281,43 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertIn('id="adminTokenInput"', server_main.ADMIN_HTML)
         self.assertIn("saveAdminToken", server_main.ADMIN_HTML)
 
+    def test_select_node_rows_uses_request_cursor_not_mutable_global_cursor(self):
+        server_main = load_server_main(ADMIN_API_TOKEN="secret-token")
+
+        class FailingGlobalCursor:
+            def execute(self, *args, **kwargs):
+                raise AssertionError("request query used mutable global cursor")
+
+        class RequestCursor:
+            def __init__(self):
+                self.executed = False
+
+            def execute(self, *args, **kwargs):
+                self.executed = True
+
+            def fetchall(self):
+                return [(
+                    "NODE_A",
+                    "INV1",
+                    "",
+                    1,
+                    2,
+                    3,
+                    server_main.datetime.now(),
+                    None,
+                    None,
+                )]
+
+        request_cursor = RequestCursor()
+        server_main.cursor = FailingGlobalCursor()
+
+        with server_main.app.test_request_context("/api/node_list"):
+            server_main.g.cursor = request_cursor
+            rows = server_main.select_node_rows()
+
+        self.assertTrue(request_cursor.executed)
+        self.assertEqual(rows[0][0], "NODE_A")
+
     def test_upload_check_rejects_unsafe_file_hash(self):
         server_main = load_server_main(ADMIN_API_TOKEN="secret-token")
         server_main.init_db = lambda: True

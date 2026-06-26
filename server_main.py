@@ -116,6 +116,14 @@ def init_db():
         return False
 
 
+def current_cursor():
+    try:
+        request_cursor = getattr(g, "cursor", None)
+    except RuntimeError:
+        request_cursor = None
+    return request_cursor or cursor
+
+
 def connect_database(config):
     if DB_ENGINE == "mysql":
         return pymysql.connect(**config)
@@ -547,7 +555,7 @@ def build_invite_tree(rows):
 
 
 def select_node_rows():
-    cursor.execute("""
+    current_cursor().execute("""
     SELECT un.user_address,un.invite_code,un.parent_invite_code,
     np.disk_used,np.online_duration,np.upload_bandwidth,np.update_time,
     nl.country,nl.city
@@ -555,7 +563,7 @@ def select_node_rows():
     LEFT JOIN node_power np ON un.user_address=np.user_address
     LEFT JOIN node_location nl ON un.user_address=nl.user_address
     """)
-    return cursor.fetchall()
+    return current_cursor().fetchall()
 
 # 1. 节点注册接口
 @app.route("/register",methods=["POST"])
@@ -566,18 +574,18 @@ def node_register():
     parent_invite = data.get("parent_invite","")
 
     # 判断设备是否已注册
-    cursor.execute("select * from node_power where node_mac=%s",(node_mac,))
-    if cursor.fetchone():
+    current_cursor().execute("select * from node_power where node_mac=%s",(node_mac,))
+    if current_cursor().fetchone():
         return jsonify({"code":200,"msg":"节点已注册，无需重复绑定"})
 
     # 生成用户专属推广码、绑定上级
     invite_code = create_invite_code()
-    cursor.execute(
+    current_cursor().execute(
         "insert into user_node(user_address,invite_code,parent_invite_code) values(%s,%s,%s)",
         (user_addr,invite_code,parent_invite)
     )
     # 初始化节点数据
-    cursor.execute(
+    current_cursor().execute(
         "insert into node_power(user_address,node_mac) values(%s,%s)",
         (user_addr,node_mac)
     )
@@ -595,7 +603,7 @@ def node_heartbeat():
     # 输入心跳数据
     print(f"{user_addr} {node_mac} {disk_used} {upload_bw}")
 
-    cursor.execute(
+    current_cursor().execute(
         "update node_power set disk_used=%s,upload_bandwidth=%s,online_duration=online_duration+1,update_time=%s where user_address=%s and node_mac=%s",
         (disk_used,upload_bw,datetime.now(),user_addr,node_mac)
     )
@@ -603,8 +611,8 @@ def node_heartbeat():
 
 # 3. 每日自动分账函数
 def auto_settle_reward():
-    cursor.execute("select * from node_power where online_duration > %s",(ONLINE_VALID_MIN,))
-    node_list = cursor.fetchall()
+    current_cursor().execute("select * from node_power where online_duration > %s",(ONLINE_VALID_MIN,))
+    node_list = current_cursor().fetchall()
     settle_date = datetime.now().date()
 
     for node in node_list:
@@ -617,23 +625,23 @@ def auto_settle_reward():
 
         # 写入节点本级收益
         node_reward = total_reward * NODE_RATIO
-        cursor.execute(
+        current_cursor().execute(
             reward_upsert_sql(),
             (user_addr,1,node_reward,total_contrib,user_addr,settle_date)
         )
 
         # 写入上级分成收益
-        cursor.execute("select parent_invite_code from user_node where user_address=%s",(user_addr,))
-        parent_res = cursor.fetchone()
+        current_cursor().execute("select parent_invite_code from user_node where user_address=%s",(user_addr,))
+        parent_res = current_cursor().fetchone()
         if not parent_res:continue
         parent_code = parent_res[0]
         if parent_code:
-            cursor.execute("select user_address from user_node where invite_code=%s",(parent_code,))
-            super_res = cursor.fetchone()
+            current_cursor().execute("select user_address from user_node where invite_code=%s",(parent_code,))
+            super_res = current_cursor().fetchone()
             if super_res:
                 super_addr = super_res[0]
                 super_reward = total_reward * SELF_RATIO
-                cursor.execute(
+                current_cursor().execute(
                     reward_upsert_sql(),
                     (super_addr,2,super_reward,total_contrib,user_addr,settle_date)
                 )
@@ -647,11 +655,11 @@ def node_list():
 # 5. 后台数据接口：收益列表
 @app.route("/api/reward_list",methods=["GET"])
 def reward_list():
-    cursor.execute("""
+    current_cursor().execute("""
     select id,user_address,reward_type,reward_amount,node_contribution,settle_time,source_user_address,settle_date
     from node_reward order by settle_time desc
     """)
-    res = cursor.fetchall()
+    res = current_cursor().fetchall()
     data_list = []
     for item in res:
         data_list.append({
@@ -669,14 +677,14 @@ def reward_list():
 
 @app.route("/api/reward_daily",methods=["GET"])
 def reward_daily():
-    cursor.execute("""
+    current_cursor().execute("""
     select settle_date,user_address,reward_type,sum(reward_amount),sum(node_contribution),count(*)
     from node_reward
     group by settle_date,user_address,reward_type
     order by settle_date desc,user_address
     """)
     data = []
-    for item in cursor.fetchall():
+    for item in current_cursor().fetchall():
         data.append({
             "settle_date":str(item[0]) if item[0] else "",
             "user_addr":item[1],
@@ -1319,13 +1327,13 @@ def upload_merge():
         return jsonify({"code":400,"msg":"IPFS节点未启动"})
 
     # 分配在线节点存储
-    cursor.execute("select user_address from node_power where online_duration > 10")
-    online_nodes = [x[0] for x in cursor.fetchall()]
+    current_cursor().execute("select user_address from node_power where online_duration > 10")
+    online_nodes = [x[0] for x in current_cursor().fetchall()]
     import random
     assign_nodes = random.sample(online_nodes, min(len(online_nodes),shard_num)) if online_nodes else get_backup_nodes()
 
     # 写入存证数据库
-    cursor.execute('''
+    current_cursor().execute('''
     insert into file_chain_record(file_name,file_hash,ipfs_cid,file_size,shard_count,upload_user,stored_nodes,visibility,access_token)
     values(%s,%s,%s,%s,%s,%s,%s,%s,%s)
     ''',(file_name,real_file_hash,cid,round(len(file_data)/1024/1024,3),shard_num,upload_addr,json.dumps(assign_nodes, ensure_ascii=False),visibility,access_token))
@@ -1333,7 +1341,7 @@ def upload_merge():
 
     # 节点算力奖励
     for node in assign_nodes:
-        cursor.execute('update node_power set disk_used=disk_used+0.1 where user_address=%s',(node,))
+        current_cursor().execute('update node_power set disk_used=disk_used+0.1 where user_address=%s',(node,))
     db.commit()
 
     # 清理临时分片
@@ -1385,13 +1393,13 @@ def api_upload_file():
         return jsonify({"code":400,"msg":"IPFS节点未启动"})
 
     assign_nodes = get_backup_nodes()
-    cursor.execute('''
+    current_cursor().execute('''
     insert into file_chain_record(file_name,file_hash,ipfs_cid,file_size,shard_count,upload_user,stored_nodes,visibility,access_token)
     values(%s,%s,%s,%s,%s,%s,%s,%s,%s)
     ''',(uploaded_file.filename,real_file_hash,cid,round(len(file_data)/1024/1024,3),shard_num,upload_addr,json.dumps(assign_nodes, ensure_ascii=False),visibility,access_token))
 
     for node in assign_nodes:
-        cursor.execute('update node_power set disk_used=disk_used+0.1 where user_address=%s',(node,))
+        current_cursor().execute('update node_power set disk_used=disk_used+0.1 where user_address=%s',(node,))
 
     return jsonify({
         "code":200,
@@ -1410,12 +1418,12 @@ def api_upload_file():
 # 查询所有上链存证记录
 @app.route("/api/file_list",methods=["GET"])
 def file_list():
-    cursor.execute("""
+    current_cursor().execute("""
     select id,file_name,file_hash,ipfs_cid,file_size,shard_count,upload_user,stored_nodes,create_time,visibility,access_token,deleted_at
     from file_chain_record where deleted_at is null order by create_time desc
     """)
     result = filter_file_records(
-        cursor.fetchall(),
+        current_cursor().fetchall(),
         keyword=request.args.get("q", ""),
         page=request.args.get("page", 1),
         page_size=request.args.get("page_size", 20),
@@ -1429,19 +1437,19 @@ def file_delete():
     file_hash = data.get("file_hash")
     if not file_hash:
         return jsonify({"code":400,"msg":"缺少 file_hash"}), 400
-    cursor.execute("update file_chain_record set deleted_at=%s where file_hash=%s",(datetime.now(),file_hash))
+    current_cursor().execute("update file_chain_record set deleted_at=%s where file_hash=%s",(datetime.now(),file_hash))
     return jsonify({"code":200,"msg":"文件记录已删除"})
 
 
 @app.route("/api/file_health",methods=["GET"])
 def file_health():
-    cursor.execute("""
+    current_cursor().execute("""
     select id,file_name,file_hash,ipfs_cid,file_size,shard_count,upload_user,stored_nodes,create_time,visibility,access_token,deleted_at
     from file_chain_record where deleted_at is null order by create_time desc
     """)
-    records = [format_file_record(row) for row in cursor.fetchall()]
-    cursor.execute(f"select user_address from node_power where update_time > {node_alive_interval_sql(3)}")
-    alive_nodes = {item[0] for item in cursor.fetchall()}
+    records = [format_file_record(row) for row in current_cursor().fetchall()]
+    current_cursor().execute(f"select user_address from node_power where update_time > {node_alive_interval_sql(3)}")
+    alive_nodes = {item[0] for item in current_cursor().fetchall()}
     data = []
     for record in records:
         health = calculate_file_health(record, alive_nodes)
@@ -1457,11 +1465,11 @@ def ipfs_status():
 
 @app.route("/api/file_download/<file_hash>",methods=["GET"])
 def file_download(file_hash):
-    cursor.execute("""
+    current_cursor().execute("""
     select id,file_name,file_hash,ipfs_cid,file_size,shard_count,upload_user,stored_nodes,create_time,visibility,access_token,deleted_at
     from file_chain_record where file_hash=%s and deleted_at is null
     """,(file_hash,))
-    row = cursor.fetchone()
+    row = current_cursor().fetchone()
     if not row:
         return jsonify({"code":404,"msg":"文件不存在"}), 404
     record = format_file_record(row)
@@ -1523,15 +1531,15 @@ def report_location():
     params = (user_addr,node_mac,ip,loc["country"],loc["province"],loc["city"],loc["lat"],loc["lng"])
     if DB_ENGINE == "mysql":
         params = params + (ip,loc["country"],loc["province"],loc["city"],loc["lat"],loc["lng"])
-    cursor.execute(node_location_upsert_sql(), params)
+    current_cursor().execute(node_location_upsert_sql(), params)
     db.commit()
     return jsonify({"code":200,"msg":"位置上报成功"})
 
 # 新增：获取全网节点地图点位
 @app.route("/api/map_node_list",methods=["GET"])
 def map_node_list():
-    cursor.execute("select * from node_location")
-    res = cursor.fetchall()
+    current_cursor().execute("select * from node_location")
+    res = current_cursor().fetchall()
     arr = []
     for item in res:
         arr.append({
@@ -1550,19 +1558,19 @@ def map_node_list():
 # 定时标记离线节点
 @app.route("/api/map_offline_clear",methods=["POST"])
 def map_offline_clear():
-    cursor.execute(f"update node_location set online_status=0 where update_time < {node_alive_interval_sql(2)}")
+    current_cursor().execute(f"update node_location set online_status=0 where update_time < {node_alive_interval_sql(2)}")
     db.commit()
     return jsonify({"code":200})
 
 # 获取【异地、不同IP】在线节点（规避同机房批量掉线）
 def get_diff_online_nodes(num):
     # 读取所有在线节点
-    cursor.execute(f"""
+    current_cursor().execute(f"""
     SELECT DISTINCT user_address,ip_addr,country,city 
     FROM node_location 
     WHERE online_status=1 AND update_time > {node_alive_interval_sql(1)}
     """)
-    all_nodes = cursor.fetchall()
+    all_nodes = current_cursor().fetchall()
     if not all_nodes:
         return []
     
@@ -1609,8 +1617,8 @@ def file_ec_decode(ec_shards):
 @app.route("/api/auto_repair_backup",methods=["POST"])
 def auto_repair_backup():
     # 遍历所有存证文件
-    cursor.execute("select id,ipfs_cid,stored_nodes from file_chain_record")
-    all_file = cursor.fetchall()
+    current_cursor().execute("select id,ipfs_cid,stored_nodes from file_chain_record")
+    all_file = current_cursor().fetchall()
     for item in all_file:
         fid,cid,nodes_str = item
         if not nodes_str:
@@ -1622,15 +1630,15 @@ def auto_repair_backup():
             node_list = []
         alive = 0
         for addr in node_list:
-            cursor.execute("select 1 from node_power where user_address=%s and online_duration>10",(addr,))
-            if cursor.fetchone():
+            current_cursor().execute("select 1 from node_power where user_address=%s and online_duration>10",(addr,))
+            if current_cursor().fetchone():
                 alive +=1
         # 副本少于3个 → 自动新增节点补备份
         if alive < COPY_NUM:
             new_nodes = get_diff_online_nodes(COPY_NUM - alive)
             # 更新存储节点列表、重新分发分片
             new_all = list(set(node_list + new_nodes))
-            cursor.execute("update file_chain_record set stored_nodes=%s where id=%s",(json.dumps(new_all, ensure_ascii=False),fid))
+            current_cursor().execute("update file_chain_record set stored_nodes=%s where id=%s",(json.dumps(new_all, ensure_ascii=False),fid))
     db.commit()
     return jsonify({"code":200,"msg":"数据副本巡检修复完成"})
 
