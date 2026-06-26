@@ -123,14 +123,24 @@ def mysql_duplicate_column_error(exc):
     return "duplicate column" in message or "duplicate column name" in message
 
 
+def mysql_duplicate_index_error(exc):
+    message = str(exc).lower()
+    return "duplicate key name" in message or "duplicate index" in message
+
+
 def should_ignore_mysql_init_error(statement, exc):
     if DB_ENGINE != "mysql":
         return False
     normalized = statement.strip().lower()
-    return (
+    duplicate_column = (
         normalized.startswith("alter table `file_chain_record` add column")
         and mysql_duplicate_column_error(exc)
     )
+    duplicate_owner_index = (
+        normalized == "create index idx_file_chain_owner on `file_chain_record` (`owner_user_id`)"
+        and mysql_duplicate_index_error(exc)
+    )
+    return duplicate_column or duplicate_owner_index
 
 
 USER_PRODUCT_MYSQL_TABLES = [

@@ -356,6 +356,32 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertTrue(server_main.ensure_database_initialized())
         self.assertIn("close", calls)
 
+    def test_mysql_initializer_ignores_duplicate_owner_index_creation(self):
+        server_main = load_server_main(DB_ENGINE="mysql")
+        calls = []
+
+        class FakeCursor:
+            def execute(self, sql):
+                calls.append(sql)
+                if sql == "CREATE INDEX idx_file_chain_owner ON `file_chain_record` (`owner_user_id`)":
+                    raise Exception("Duplicate key name 'idx_file_chain_owner'")
+
+        class FakeConnection:
+            def cursor(self):
+                return FakeCursor()
+
+            def close(self):
+                calls.append("close")
+
+        def fake_connect(**kwargs):
+            calls.append(kwargs)
+            return FakeConnection()
+
+        server_main.connect_database.__globals__["pymysql"].connect = fake_connect
+
+        self.assertTrue(server_main.ensure_database_initialized())
+        self.assertIn("close", calls)
+
     def test_database_initializer_failure_updates_server_error(self):
         server_main = load_server_main(DB_ENGINE="mysql")
         missing_path = Path("tests/missing-init-file.sql")
