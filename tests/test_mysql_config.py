@@ -354,6 +354,51 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertEqual(partial_response.status_code, 400)
         self.assertEqual(partial_response.content_type, "application/json")
 
+    def test_wallet_login_invalid_nonce_returns_json_400(self):
+        server_main = load_server_main(SESSION_SECRET="session-secret")
+        server_main.init_db = lambda: True
+
+        class FakeCursor:
+            def execute(self, *args, **kwargs):
+                return None
+
+            def fetchone(self):
+                return None
+
+        server_main.cursor = FakeCursor()
+
+        response = server_main.app.test_client().post(
+            "/api/wallet/login",
+            json={"wallet_address": "0xabc", "nonce": "bad-nonce", "signature": "sig"},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.content_type, "application/json")
+
+    def test_wallet_bind_invalid_nonce_returns_json_400(self):
+        auth = importlib.import_module("auth")
+        server_main = load_server_main(SESSION_SECRET="session-secret")
+        server_main.init_db = lambda: True
+        token = auth.create_session_token({"user_id": 7, "username": "alice"}, "session-secret")
+
+        class FakeCursor:
+            def execute(self, *args, **kwargs):
+                return None
+
+            def fetchone(self):
+                return None
+
+        server_main.cursor = FakeCursor()
+
+        response = server_main.app.test_client().post(
+            "/api/wallet/bind",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"wallet_address": "0xabc", "nonce": "bad-nonce", "signature": "sig"},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.content_type, "application/json")
+
     def test_default_database_engine_is_postgresql(self):
         server_main = load_server_main()
 

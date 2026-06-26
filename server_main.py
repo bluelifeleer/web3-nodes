@@ -361,7 +361,7 @@ def wallet_bind():
         return jsonify({"code":400,"msg":"缺少钱包地址、nonce 或签名"}), 400
     ok, msg = consume_wallet_nonce(wallet_address, data.get("nonce"), "bind", data.get("signature"))
     if not ok:
-        return jsonify({"code":401,"msg":msg}), 401
+        return jsonify({"code":400,"msg":msg}), 400
     try:
         current_cursor().execute(
             "update app_user set wallet_address=%s where id=%s",
@@ -386,7 +386,7 @@ def wallet_login():
         return session_secret_missing_response()
     ok, msg = consume_wallet_nonce(wallet_address, data.get("nonce"), "login", data.get("signature"))
     if not ok:
-        return jsonify({"code":401,"msg":msg}), 401
+        return jsonify({"code":400,"msg":msg}), 400
     user_row = select_user_by_wallet(wallet_address)
     if not user_row:
         return jsonify({"code":401,"msg":"钱包地址未绑定用户"}), 401
