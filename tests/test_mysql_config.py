@@ -106,6 +106,17 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertEqual(payload["user_id"], 7)
         self.assertEqual(payload["username"], "alice")
 
+    def test_session_token_rejects_tampering_and_expiry(self):
+        auth = importlib.import_module("auth")
+
+        token = auth.create_session_token({"user_id": 7}, "test-secret")
+        encoded, signature = token.split(".", 1)
+        tampered = f"{encoded[:-1]}x.{signature}"
+        expired = auth.create_session_token({"user_id": 7}, "test-secret", ttl=-1)
+
+        self.assertIsNone(auth.verify_session_token(tampered, "test-secret"))
+        self.assertIsNone(auth.verify_session_token(expired, "test-secret"))
+
     def test_wallet_login_message_contains_nonce_and_purpose(self):
         auth = importlib.import_module("auth")
 
@@ -121,11 +132,173 @@ class MysqlConfigTest(unittest.TestCase):
         response = server_main.app.test_client().post("/api/auth/register", json={"password": "pw"})
         self.assertEqual(response.status_code, 400)
 
-    def test_auth_me_requires_user_token(self):
+    def test_register_with_non_json_body_returns_json_400(self):
         server_main = load_server_main()
+        server_main.init_db = lambda: True
+
+        response = server_main.app.test_client().post("/api/auth/register", data="not-json")
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.content_type, "application/json")
+
+    def test_register_rejects_duplicate_username(self):
+        server_main = load_server_main(SESSION_SECRET="session-secret")
+        server_main.init_db = lambda: True
+        server_main.select_user_by_username = lambda username: (
+            1,
+            username,
+            "hash",
+            None,
+            "active",
+        )
+
+        response = server_main.app.test_client().post(
+            "/api/auth/register",
+            json={"username": "alice", "password": "pw"},
+        )
+
+        self.assertEqual(response.status_code, 409)
+
+    def test_login_rejects_bad_password(self):
+        auth = importlib.import_module("auth")
+        server_main = load_server_main(SESSION_SECRET="session-secret")
+        server_main.init_db = lambda: True
+        server_main.select_user_by_username = lambda username: (
+            1,
+            username,
+            auth.hash_password("correct-pass"),
+            None,
+            "active",
+        )
+
+        response = server_main.app.test_client().post(
+            "/api/auth/login",
+            json={"username": "alice", "password": "wrong-pass"},
+        )
+
+        self.assertEqual(response.status_code, 401)
+
+    def test_login_fails_safely_without_session_secret(self):
+        auth = importlib.import_module("auth")
+        server_main = load_server_main()
+        server_main.init_db = lambda: True
+        server_main.select_user_by_username = lambda username: (
+            1,
+            username,
+            auth.hash_password("pw"),
+            None,
+            "active",
+        )
+
+        response = server_main.app.test_client().post(
+            "/api/auth/login",
+            json={"username": "alice", "password": "pw"},
+        )
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.content_type, "application/json")
+
+    def test_login_can_issue_token_with_admin_api_token_secret(self):
+        auth = importlib.import_module("auth")
+        server_main = load_server_main(ADMIN_API_TOKEN="admin-secret")
+        server_main.init_db = lambda: True
+        server_main.select_user_by_username = lambda username: (
+            1,
+            username,
+            auth.hash_password("pw"),
+            "",
+            "active",
+        )
+        server_main.select_user_by_id = lambda user_id: (
+            user_id,
+            "alice",
+            auth.hash_password("pw"),
+            "",
+            "active",
+        )
+
+        class FakeCursor:
+            def execute(self, *args, **kwargs):
+                return None
+
+        server_main.cursor = FakeCursor()
+
+        response = server_main.app.test_client().post(
+            "/api/auth/login",
+            json={"username": "alice", "password": "pw"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("token", response.get_json())
+
+    def test_auth_me_requires_user_token(self):
+        server_main = load_server_main(SESSION_SECRET="session-secret")
         server_main.init_db = lambda: True
         response = server_main.app.test_client().get("/api/auth/me")
         self.assertEqual(response.status_code, 401)
+
+    def test_auth_me_rejects_known_default_secret_when_unconfigured(self):
+        auth = importlib.import_module("auth")
+        server_main = load_server_main()
+        server_main.init_db = lambda: True
+        server_main.select_user_by_id = lambda user_id: (
+            user_id,
+            "alice",
+            "hash",
+            "",
+            "active",
+        )
+        token = auth.create_session_token({"user_id": 7, "username": "alice"}, "dev-session-secret")
+
+        response = server_main.app.test_client().get(
+            "/api/auth/me",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        self.assertEqual(response.status_code, 503)
+
+    def test_auth_me_accepts_valid_configured_session_secret(self):
+        auth = importlib.import_module("auth")
+        server_main = load_server_main(SESSION_SECRET="session-secret")
+        server_main.init_db = lambda: True
+        server_main.select_user_by_id = lambda user_id: (
+            user_id,
+            "alice",
+            "hash",
+            "",
+            "active",
+        )
+        token = auth.create_session_token({"user_id": 7, "username": "alice"}, "session-secret")
+
+        response = server_main.app.test_client().get(
+            "/api/auth/me",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+
+    def test_wallet_nonce_rowcount_zero_rejects_consumption(self):
+        server_main = load_server_main(SESSION_SECRET="session-secret")
+
+        class FakeCursor:
+            def __init__(self):
+                self.rowcount = 0
+                self.executed = []
+
+            def execute(self, sql, params=None):
+                self.executed.append((sql, params))
+
+            def fetchone(self):
+                return (3, "0xabc", "nonce1", server_main.datetime.now() + server_main.timedelta(minutes=5), None)
+
+        fake_cursor = FakeCursor()
+        server_main.cursor = fake_cursor
+        server_main.auth.recover_wallet_address = lambda message, signature: "0xabc"
+
+        ok, msg = server_main.consume_wallet_nonce("0xabc", "nonce1", "login", "signature")
+
+        self.assertFalse(ok)
+        self.assertIn("nonce", msg.lower())
 
     def test_default_database_engine_is_postgresql(self):
         server_main = load_server_main()

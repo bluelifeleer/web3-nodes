@@ -4,9 +4,6 @@ import hmac
 import json
 import secrets
 import time
-from functools import wraps
-
-from flask import g, jsonify, request
 
 
 SESSION_TTL_SECONDS = 7 * 24 * 60 * 60
