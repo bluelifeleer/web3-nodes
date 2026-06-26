@@ -1227,6 +1227,101 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertEqual(record["download_url"], "/api/file_download/hash1?token=token123")
         self.assertEqual(record["nodes"], ["NODE_A", "NODE_B"])
 
+    def test_user_file_record_format_includes_owner_and_download_fields(self):
+        files = importlib.import_module("files")
+        now = importlib.import_module("datetime").datetime.now()
+        row = (
+            1,
+            "demo.txt",
+            "hash",
+            "cid",
+            2.5,
+            3,
+            "NODE_A",
+            "[]",
+            now,
+            "public",
+            "",
+            None,
+            7,
+            "0xabc",
+            4,
+            now,
+        )
+
+        record = files.format_user_file_record(row)
+
+        self.assertEqual(record["owner_user_id"], 7)
+        self.assertEqual(record["download_count"], 4)
+        self.assertEqual(record["file_name"], "demo.txt")
+
+    def test_user_files_requires_user_token(self):
+        server_main = load_server_main(SESSION_SECRET="session-secret")
+        server_main.init_db = lambda: True
+
+        response = server_main.app.test_client().get("/api/user/files")
+
+        self.assertEqual(response.status_code, 401)
+
+    def test_user_files_list_selects_only_current_owner(self):
+        auth = importlib.import_module("auth")
+        server_main = load_server_main(SESSION_SECRET="session-secret")
+        now = server_main.datetime.now()
+        token = auth.create_session_token({"user_id": 7, "username": "alice"}, "session-secret")
+
+        class FakeCursor:
+            def __init__(self):
+                self.executed = []
+                self.last_sql = ""
+
+            def execute(self, sql, params=None):
+                self.last_sql = sql
+                self.executed.append((sql, params))
+
+            def fetchone(self):
+                if "from app_user" in self.last_sql:
+                    return (7, "alice", "hash", "0xabc", "active")
+                return None
+
+            def fetchall(self):
+                return [(
+                    1,
+                    "demo.txt",
+                    "hash",
+                    "cid",
+                    2.5,
+                    3,
+                    "NODE_A",
+                    "[]",
+                    now,
+                    "public",
+                    "",
+                    None,
+                    7,
+                    "0xabc",
+                    4,
+                    now,
+                )]
+
+        fake_cursor = FakeCursor()
+        server_main.cursor = fake_cursor
+        server_main.init_db = lambda: True
+        response = server_main.app.test_client().get(
+            "/api/user/files",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["data"][0]["owner_user_id"], 7)
+        file_queries = [
+            (sql, params)
+            for sql, params in fake_cursor.executed
+            if "from file_chain_record" in sql
+        ]
+        self.assertEqual(file_queries[-1][1], (7,))
+        self.assertIn("owner_user_id=%s", file_queries[-1][0])
+        self.assertIn("deleted_at is null", file_queries[-1][0])
+
     def test_filter_file_records_searches_and_paginates(self):
         server_main = load_server_main()
         rows = [

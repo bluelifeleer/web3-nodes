@@ -11,6 +11,7 @@ import re
 import secrets
 import urllib.parse
 import auth
+from files import USER_FILE_SELECT_PROJECTION, format_user_file_record
 try:
     from Crypto.Cipher import AES
 except ImportError:
@@ -524,6 +525,10 @@ def format_file_record(item):
         "deleted_at": str(item[11]) if len(item) > 11 and item[11] else "",
         "download_url": f"/api/file_download/{file_hash}{token_query}",
     }
+
+
+def format_user_file_records(rows):
+    return [format_user_file_record(row) for row in rows]
 
 
 def filter_file_records(rows, keyword="", page=1, page_size=20):
@@ -1531,6 +1536,127 @@ def api_upload_file():
             "download_url":f"/api/file_download/{real_file_hash}" + (f"?token={access_token}" if access_token else "")
         }
     })
+
+
+@app.route("/api/user/files", methods=["POST"])
+@require_user
+def user_file_upload():
+    uploaded_file = request.files.get("file")
+    visibility = normalize_visibility(request.form.get("visibility", "public"))
+    access_token = create_access_token(visibility)
+    if not uploaded_file:
+        return jsonify({"code":400,"msg":"缺少上传文件"}), 400
+
+    file_data = uploaded_file.read()
+    if not file_data:
+        return jsonify({"code":400,"msg":"上传文件为空"}), 400
+    if len(file_data) > MAX_UPLOAD_BYTES:
+        return jsonify({"code":413,"msg":"文件超过上传大小限制"}), 413
+
+    try:
+        encrypt_data = aes_encrypt(file_data)
+    except RuntimeError as exc:
+        return jsonify({"code":500,"msg":str(exc)}), 500
+    shards = file_shard(encrypt_data)
+    shard_num = len(shards)
+    real_file_hash = get_file_hash(file_data)
+
+    try:
+        client = get_ipfs_client()
+        try:
+            cid = client.add_bytes(encrypt_data)
+        finally:
+            if hasattr(client, "close"):
+                client.close()
+    except Exception:
+        return jsonify({"code":400,"msg":"IPFS节点未启动"}), 400
+
+    user_row = getattr(g, "current_user_row", None) or ()
+    owner_user_id = user_row[0] if len(user_row) > 0 else g.current_user.get("user_id")
+    owner_wallet_address = user_row[3] if len(user_row) > 3 and user_row[3] else ""
+    username = user_row[1] if len(user_row) > 1 and user_row[1] else ""
+    upload_user = owner_wallet_address or username
+    assign_nodes = get_backup_nodes()
+    current_cursor().execute('''
+    insert into file_chain_record(file_name,file_hash,ipfs_cid,file_size,shard_count,upload_user,stored_nodes,visibility,access_token,owner_user_id,owner_wallet_address)
+    values(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+    ''',(
+        uploaded_file.filename,
+        real_file_hash,
+        cid,
+        round(len(file_data)/1024/1024,3),
+        shard_num,
+        upload_user,
+        json.dumps(assign_nodes, ensure_ascii=False),
+        visibility,
+        access_token,
+        owner_user_id,
+        owner_wallet_address,
+    ))
+
+    for node in assign_nodes:
+        current_cursor().execute('update node_power set disk_used=disk_used+0.1 where user_address=%s',(node,))
+    commit_database()
+
+    return jsonify({
+        "code":200,
+        "msg":"文件加密上链完成",
+        "data":{
+            "file_hash":real_file_hash,
+            "ipfs_cid":cid,
+            "shard_count":shard_num,
+            "storage_nodes":assign_nodes,
+            "visibility":visibility,
+            "access_token":access_token,
+            "owner_user_id":owner_user_id,
+            "owner_wallet_address":owner_wallet_address,
+            "download_url":f"/api/file_download/{real_file_hash}" + (f"?token={access_token}" if access_token else "")
+        }
+    })
+
+
+@app.route("/api/user/files", methods=["GET"])
+@require_user
+def user_file_list():
+    owner_user_id = g.current_user.get("user_id")
+    current_cursor().execute(f"""
+    select {USER_FILE_SELECT_PROJECTION}
+    from file_chain_record
+    where owner_user_id=%s and deleted_at is null
+    order by create_time desc
+    """,(owner_user_id,))
+    return jsonify({"code":200,"data":format_user_file_records(current_cursor().fetchall())})
+
+
+@app.route("/api/user/files/<file_hash>", methods=["GET"])
+@require_user
+def user_file_detail(file_hash):
+    owner_user_id = g.current_user.get("user_id")
+    current_cursor().execute(f"""
+    select {USER_FILE_SELECT_PROJECTION}
+    from file_chain_record
+    where owner_user_id=%s and file_hash=%s and deleted_at is null
+    """,(owner_user_id,file_hash))
+    row = current_cursor().fetchone()
+    if not row:
+        return jsonify({"code":404,"msg":"文件不存在"}), 404
+    return jsonify({"code":200,"data":format_user_file_record(row)})
+
+
+@app.route("/api/user/files/<file_hash>", methods=["DELETE"])
+@require_user
+def user_file_delete(file_hash):
+    owner_user_id = g.current_user.get("user_id")
+    active_cursor = current_cursor()
+    active_cursor.execute(
+        "update file_chain_record set deleted_at=%s where owner_user_id=%s and file_hash=%s and deleted_at is null",
+        (datetime.now(),owner_user_id,file_hash),
+    )
+    commit_database()
+    if getattr(active_cursor, "rowcount", None) == 0:
+        return jsonify({"code":404,"msg":"文件不存在"}), 404
+    return jsonify({"code":200,"msg":"文件记录已删除"})
+
 
 # 查询所有上链存证记录
 @app.route("/api/file_list",methods=["GET"])
