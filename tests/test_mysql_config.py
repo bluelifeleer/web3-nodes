@@ -1588,8 +1588,56 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         body = response.get_data(as_text=True)
         self.assertIn("/api/user/files", body)
+        self.assertIn('/api/user/files/${encodeURIComponent(fileHash)}/shares', body)
+        self.assertIn("/s/", body)
         self.assertIn("Authorization", body)
         self.assertIn("user_token", body)
+
+    def test_user_login_page_renders_forms_and_token_storage(self):
+        server_main = load_server_main(SESSION_SECRET="session-secret")
+        server_main.init_db = lambda: True
+
+        response = server_main.app.test_client().get("/user/login")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("钱包登录", body)
+        self.assertIn("/api/auth/register", body)
+        self.assertIn("/api/auth/login", body)
+        self.assertIn("/api/wallet/login", body)
+        self.assertIn('localStorage.setItem("user_token"', body)
+
+    def test_user_dashboard_page_uses_user_product_apis(self):
+        server_main = load_server_main(SESSION_SECRET="session-secret")
+        server_main.init_db = lambda: True
+
+        response = server_main.app.test_client().get("/user/dashboard")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        for api_path in (
+            "/api/auth/me",
+            "/api/user/files",
+            "/api/user/shares",
+            "/api/user/points",
+            "/api/user/earnings",
+            "/api/user/withdrawals",
+        ):
+            self.assertIn(api_path, body)
+        self.assertIn("user_token", body)
+
+    def test_public_share_page_downloads_with_inline_extract_code(self):
+        server_main = load_server_main(SESSION_SECRET="session-secret")
+        server_main.init_db = lambda: True
+
+        response = server_main.app.test_client().get("/s/demo-share")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("下载", body)
+        self.assertIn("/api/share/demo-share", body)
+        self.assertIn("/api/share/${encodeURIComponent(shareCode)}/download", body)
+        self.assertIn("extract_code", body)
 
     def test_user_files_list_selects_only_current_owner(self):
         auth = importlib.import_module("auth")

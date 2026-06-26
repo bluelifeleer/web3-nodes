@@ -1646,38 +1646,102 @@ USER_UPLOAD_HTML = '''
     <meta charset="UTF-8">
     <title>用户文件上传</title>
     <style>
-        body{font-family:Arial,"Microsoft YaHei",sans-serif;max-width:720px;margin:40px auto;padding:0 16px;background:#f7f8fb;color:#1f2937;}
-        form{display:grid;gap:14px;background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:20px;}
+        body{font-family:Arial,"Microsoft YaHei",sans-serif;max-width:960px;margin:32px auto;padding:0 16px;background:#f7f8fb;color:#1f2937;}
+        nav{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:18px;}
+        a{color:#2563eb;text-decoration:none;}
+        .panel{background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:18px;margin-bottom:16px;}
+        form{display:grid;gap:12px;}
         label{display:grid;gap:6px;font-weight:600;}
         input,select,button{font-size:15px;padding:10px;border:1px solid #d1d5db;border-radius:6px;}
         button{background:#2563eb;color:white;border:0;cursor:pointer;}
-        pre{white-space:pre-wrap;background:#111827;color:#e5e7eb;border-radius:8px;padding:16px;}
+        button.secondary{background:#4b5563;}
+        .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;}
         .notice{margin:12px 0;padding:12px;border-radius:6px;background:#fff7ed;border:1px solid #fed7aa;}
+        .status{white-space:pre-wrap;background:#111827;color:#e5e7eb;border-radius:8px;padding:14px;min-height:54px;}
+        .linkbox{word-break:break-all;background:#ecfdf5;border:1px solid #bbf7d0;border-radius:8px;padding:12px;margin-top:12px;}
     </style>
 </head>
 <body>
     <h1>用户文件上传</h1>
+    <nav>
+        <a href="/user/dashboard">用户面板</a>
+        <a href="/user/login">登录</a>
+    </nav>
     <div id="loginNotice" class="notice" hidden>未检测到登录 Token，请先登录后再上传。</div>
-    <form id="uploadForm">
-        <label>选择文件
-            <input id="fileInput" name="file" type="file" required>
-        </label>
-        <label>访问权限
-            <select id="visibilityInput" name="visibility">
-                <option value="public">公开</option>
-                <option value="private">私有</option>
-            </select>
-        </label>
-        <button type="submit">上传</button>
-    </form>
-    <pre id="resultBox">等待上传...</pre>
+    <section class="panel">
+        <form id="uploadForm">
+            <label>选择文件
+                <input id="fileInput" name="file" type="file" required>
+            </label>
+            <label>文件访问权限
+                <select id="visibilityInput" name="visibility">
+                    <option value="public">公开</option>
+                    <option value="private">私有</option>
+                </select>
+            </label>
+            <button type="submit">上传文件</button>
+        </form>
+    </section>
+    <section class="panel">
+        <h2>创建分享</h2>
+        <form id="shareForm">
+            <label>文件哈希
+                <input id="fileHashInput" name="file_hash" placeholder="上传成功后自动填入" required>
+            </label>
+            <div class="grid">
+                <label>提取码
+                    <input id="extractCodeInput" name="extract_code" placeholder="可留空">
+                </label>
+                <label>过期时间
+                    <input id="expiresAtInput" name="expires_at" type="datetime-local">
+                </label>
+                <label>下载次数限制
+                    <input id="maxDownloadsInput" name="max_downloads" type="number" min="0" value="0">
+                </label>
+            </div>
+            <button type="submit" class="secondary">生成分享链接</button>
+        </form>
+        <div id="shareLinkBox" class="linkbox" hidden></div>
+    </section>
+    <pre id="resultBox" class="status">等待上传...</pre>
     <script>
     const token = localStorage.getItem("user_token") || "";
     const notice = document.getElementById("loginNotice");
     const resultBox = document.getElementById("resultBox");
+    const fileHashInput = document.getElementById("fileHashInput");
+    const shareLinkBox = document.getElementById("shareLinkBox");
     if(!token){
         notice.hidden = false;
         resultBox.textContent = "缺少 user_token，请先登录。";
+    }
+    function authHeaders(extra){
+        return Object.assign({"Authorization": `Bearer ${token}`}, extra || {});
+    }
+    function toApiDatetime(value){
+        return value ? value.replace("T", " ") + ":00" : "";
+    }
+    async function createShare(fileHash){
+        const payload = {
+            visibility: "public",
+            extract_code: document.getElementById("extractCodeInput").value.trim(),
+            expires_at: toApiDatetime(document.getElementById("expiresAtInput").value),
+            max_downloads: document.getElementById("maxDownloadsInput").value || 0,
+            status: "active"
+        };
+        const response = await fetch(`/api/user/files/${encodeURIComponent(fileHash)}/shares`, {
+            method: "POST",
+            headers: authHeaders({"Content-Type": "application/json"}),
+            body: JSON.stringify(payload)
+        });
+        const data = await response.json();
+        if(!response.ok){
+            throw new Error(data.msg || response.statusText);
+        }
+        const shareCode = (data.data || {}).share_code || "";
+        const publicUrl = `${location.origin}/s/${encodeURIComponent(shareCode)}`;
+        shareLinkBox.hidden = false;
+        shareLinkBox.innerHTML = `分享链接：<a href="/s/${encodeURIComponent(shareCode)}">${publicUrl}</a>`;
+        return publicUrl;
     }
     document.getElementById("uploadForm").addEventListener("submit", async (event) => {
         event.preventDefault();
@@ -1694,18 +1758,437 @@ USER_UPLOAD_HTML = '''
         try{
             const response = await fetch("/api/user/files", {
                 method: "POST",
-                headers: {"Authorization": `Bearer ${token}`},
+                headers: authHeaders(),
                 body
             });
             const payload = await response.json();
             const data = payload.data || {};
-            resultBox.textContent = response.ok
-                ? `上传完成\\nfile_hash: ${data.file_hash || ""}\\ndownload_url: ${data.download_url || ""}`
-                : `上传失败\\n${payload.msg || response.statusText}`;
+            if(!response.ok){
+                resultBox.textContent = `上传失败\\n${payload.msg || response.statusText}`;
+                return;
+            }
+            fileHashInput.value = data.file_hash || "";
+            resultBox.textContent = `上传完成\\nfile_hash: ${data.file_hash || ""}\\ndownload_url: ${data.download_url || ""}\\n可继续生成 /s/<share_code> 分享链接。`;
         }catch(error){
             resultBox.textContent = `上传失败\\n${error.message}`;
         }
     });
+    document.getElementById("shareForm").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        if(!token){
+            resultBox.textContent = "缺少 user_token，请先登录。";
+            return;
+        }
+        const fileHash = fileHashInput.value.trim();
+        resultBox.textContent = "正在创建分享...";
+        try{
+            const publicUrl = await createShare(fileHash);
+            resultBox.textContent = `分享已创建\\n${publicUrl}`;
+        }catch(error){
+            resultBox.textContent = `分享创建失败\\n${error.message}`;
+        }
+    });
+    </script>
+</body>
+</html>
+'''
+
+USER_LOGIN_HTML = '''
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>用户登录</title>
+    <style>
+        body{font-family:Arial,"Microsoft YaHei",sans-serif;max-width:980px;margin:32px auto;padding:0 16px;background:#f7f8fb;color:#1f2937;}
+        nav{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:18px;}
+        a{color:#2563eb;text-decoration:none;}
+        .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px;}
+        .panel{background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:18px;}
+        form{display:grid;gap:12px;}
+        label{display:grid;gap:6px;font-weight:600;}
+        input,button{font-size:15px;padding:10px;border:1px solid #d1d5db;border-radius:6px;}
+        button{background:#2563eb;color:#fff;border:0;cursor:pointer;}
+        button.secondary{background:#4b5563;}
+        .status{white-space:pre-wrap;background:#111827;color:#e5e7eb;border-radius:8px;padding:14px;margin-top:16px;min-height:54px;}
+        .hint{color:#4b5563;font-size:14px;}
+    </style>
+</head>
+<body>
+    <h1>用户登录</h1>
+    <nav>
+        <a href="/user/dashboard">用户面板</a>
+        <a href="/user/upload">上传文件</a>
+    </nav>
+    <div class="grid">
+        <section class="panel">
+            <h2>注册</h2>
+            <form id="registerForm">
+                <label>用户名
+                    <input id="registerUsername" autocomplete="username" required>
+                </label>
+                <label>密码
+                    <input id="registerPassword" type="password" autocomplete="new-password" required>
+                </label>
+                <button type="submit">注册并登录</button>
+            </form>
+        </section>
+        <section class="panel">
+            <h2>用户名密码登录</h2>
+            <form id="passwordLoginForm">
+                <label>用户名
+                    <input id="loginUsername" autocomplete="username" required>
+                </label>
+                <label>密码
+                    <input id="loginPassword" type="password" autocomplete="current-password" required>
+                </label>
+                <button type="submit">登录</button>
+            </form>
+        </section>
+        <section class="panel">
+            <h2>钱包登录</h2>
+            <form id="walletLoginForm">
+                <label>钱包地址
+                    <input id="walletAddress" placeholder="0x..." required>
+                </label>
+                <button type="button" class="secondary" id="nonceButton">获取登录 nonce</button>
+                <label>nonce
+                    <input id="walletNonce" required>
+                </label>
+                <label>签名
+                    <input id="walletSignature" required>
+                </label>
+                <div class="hint" id="walletMessage"></div>
+                <button type="submit">钱包登录</button>
+            </form>
+        </section>
+    </div>
+    <pre id="statusBox" class="status">等待操作...</pre>
+    <script>
+    const statusBox = document.getElementById("statusBox");
+    function showStatus(message){ statusBox.textContent = message; }
+    function saveSession(payload){
+        const token = payload.token || payload.user_token || "";
+        if(!token){ throw new Error(payload.msg || "接口未返回 user_token"); }
+        localStorage.setItem("user_token", token);
+        showStatus(`登录成功\\nuser_token 已保存\\n用户：${((payload.user || {}).username) || ""}`);
+    }
+    async function postJson(url, body){
+        const response = await fetch(url, {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify(body)
+        });
+        const payload = await response.json();
+        if(!response.ok){ throw new Error(payload.msg || response.statusText); }
+        return payload;
+    }
+    document.getElementById("registerForm").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        try{
+            const payload = await postJson("/api/auth/register", {
+                username: document.getElementById("registerUsername").value.trim(),
+                password: document.getElementById("registerPassword").value
+            });
+            saveSession(payload);
+        }catch(error){ showStatus(`注册失败\\n${error.message}`); }
+    });
+    document.getElementById("passwordLoginForm").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        try{
+            const payload = await postJson("/api/auth/login", {
+                username: document.getElementById("loginUsername").value.trim(),
+                password: document.getElementById("loginPassword").value
+            });
+            saveSession(payload);
+        }catch(error){ showStatus(`登录失败\\n${error.message}`); }
+    });
+    document.getElementById("nonceButton").addEventListener("click", async () => {
+        try{
+            const payload = await postJson("/api/wallet/nonce", {
+                wallet_address: document.getElementById("walletAddress").value.trim(),
+                purpose: "login"
+            });
+            document.getElementById("walletNonce").value = payload.nonce || "";
+            document.getElementById("walletMessage").textContent = payload.message || "";
+            showStatus("nonce 已生成，请在钱包中签名后填入签名。");
+        }catch(error){ showStatus(`nonce 获取失败\\n${error.message}`); }
+    });
+    document.getElementById("walletLoginForm").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        try{
+            const payload = await postJson("/api/wallet/login", {
+                wallet_address: document.getElementById("walletAddress").value.trim(),
+                nonce: document.getElementById("walletNonce").value.trim(),
+                signature: document.getElementById("walletSignature").value.trim()
+            });
+            saveSession(payload);
+        }catch(error){ showStatus(`钱包登录失败\\n${error.message}`); }
+    });
+    </script>
+</body>
+</html>
+'''
+
+USER_DASHBOARD_HTML = '''
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>用户面板</title>
+    <style>
+        body{font-family:Arial,"Microsoft YaHei",sans-serif;max-width:1180px;margin:28px auto;padding:0 16px;background:#f7f8fb;color:#1f2937;}
+        nav{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:18px;}
+        a{color:#2563eb;text-decoration:none;}
+        .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px;}
+        .panel{background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:16px;margin-bottom:14px;}
+        .metric{font-size:24px;font-weight:700;margin:4px 0;}
+        table{width:100%;border-collapse:collapse;font-size:14px;}
+        th,td{border-bottom:1px solid #e5e7eb;padding:8px;text-align:left;vertical-align:top;}
+        th{background:#f3f4f6;}
+        input,button{font-size:15px;padding:10px;border:1px solid #d1d5db;border-radius:6px;}
+        button{background:#2563eb;color:#fff;border:0;cursor:pointer;}
+        .status{white-space:pre-wrap;background:#111827;color:#e5e7eb;border-radius:8px;padding:14px;min-height:48px;}
+        .wrap{word-break:break-all;}
+    </style>
+</head>
+<body>
+    <h1>用户面板</h1>
+    <nav>
+        <a href="/user/upload">上传文件</a>
+        <a href="/user/login">登录</a>
+    </nav>
+    <section class="panel">
+        <button id="refreshButton">刷新</button>
+        <pre id="statusBox" class="status">正在读取 user_token...</pre>
+    </section>
+    <div class="grid">
+        <section class="panel">
+            <h2>账户</h2>
+            <div id="accountBox"></div>
+        </section>
+        <section class="panel">
+            <h2>收益</h2>
+            <div class="metric" id="availableEarnings">0</div>
+            <div id="earningsBox"></div>
+        </section>
+        <section class="panel">
+            <h2>积分</h2>
+            <div class="metric" id="totalPoints">0</div>
+            <div id="pointsBox"></div>
+        </section>
+    </div>
+    <section class="panel">
+        <h2>钱包绑定</h2>
+        <div class="grid">
+            <input id="bindWalletAddress" placeholder="钱包地址 0x...">
+            <button id="bindNonceButton">获取绑定 nonce</button>
+            <input id="bindNonce" placeholder="nonce">
+            <input id="bindSignature" placeholder="签名">
+            <button id="bindWalletButton">绑定钱包</button>
+        </div>
+        <div id="bindMessage" class="wrap"></div>
+    </section>
+    <section class="panel">
+        <h2>文件</h2>
+        <div id="filesBox"></div>
+    </section>
+    <section class="panel">
+        <h2>分享</h2>
+        <div id="sharesBox"></div>
+    </section>
+    <section class="panel">
+        <h2>提现</h2>
+        <div class="grid">
+            <input id="withdrawAmount" placeholder="提现金额">
+            <button id="withdrawButton">提交提现</button>
+        </div>
+        <div id="withdrawalsBox"></div>
+    </section>
+    <script>
+    const token = localStorage.getItem("user_token") || "";
+    const statusBox = document.getElementById("statusBox");
+    function showStatus(message){ statusBox.textContent = message; }
+    function authHeaders(extra){
+        return Object.assign({"Authorization": `Bearer ${token}`}, extra || {});
+    }
+    function esc(value){
+        return String(value == null ? "" : value).replace(/[&<>"']/g, (ch) => ({
+            "&":"&amp;","<":"&lt;",">":"&gt;","\\"":"&quot;","'":"&#39;"
+        }[ch]));
+    }
+    async function apiGet(url){
+        const response = await fetch(url, {headers: authHeaders()});
+        const payload = await response.json();
+        if(!response.ok){ throw new Error(`${url}: ${payload.msg || response.statusText}`); }
+        return payload;
+    }
+    async function apiPost(url, body){
+        const response = await fetch(url, {
+            method: "POST",
+            headers: authHeaders({"Content-Type": "application/json"}),
+            body: JSON.stringify(body)
+        });
+        const payload = await response.json();
+        if(!response.ok){ throw new Error(payload.msg || response.statusText); }
+        return payload;
+    }
+    function renderTable(targetId, columns, rows){
+        const target = document.getElementById(targetId);
+        if(!rows || rows.length === 0){
+            target.innerHTML = "暂无数据";
+            return;
+        }
+        target.innerHTML = `<table><thead><tr>${columns.map((c) => `<th>${esc(c.label)}</th>`).join("")}</tr></thead><tbody>${
+            rows.map((row) => `<tr>${columns.map((c) => `<td class="wrap">${esc(c.render ? c.render(row) : row[c.key])}</td>`).join("")}</tr>`).join("")
+        }</tbody></table>`;
+    }
+    async function refreshDashboard(){
+        if(!token){
+            showStatus("缺少 user_token，请先到登录页登录。");
+            return;
+        }
+        showStatus("加载中...");
+        try{
+            const [me, files, sharesData, pointsData, earnings, withdrawals] = await Promise.all([
+                apiGet("/api/auth/me"),
+                apiGet("/api/user/files"),
+                apiGet("/api/user/shares"),
+                apiGet("/api/user/points"),
+                apiGet("/api/user/earnings"),
+                apiGet("/api/user/withdrawals")
+            ]);
+            const user = me.user || {};
+            document.getElementById("accountBox").innerHTML = `用户：${esc(user.username)}<br>钱包：${esc(user.wallet_address || "未绑定")}<br>状态：${esc(user.status)}`;
+            const earningData = earnings.data || {};
+            document.getElementById("availableEarnings").textContent = earningData.available_earnings ?? 0;
+            document.getElementById("earningsBox").innerHTML = `累计收益：${esc(earningData.total_earnings ?? 0)}<br>已提现：${esc(earningData.withdrawn_earnings ?? 0)}<br>冻结中：${esc(earningData.pending_withdrawals ?? 0)}`;
+            document.getElementById("totalPoints").textContent = (pointsData.data || {}).total_points ?? 0;
+            renderTable("pointsBox", [
+                {label:"类型", key:"point_type"},
+                {label:"数量", key:"amount"},
+                {label:"来源", key:"source_type"},
+                {label:"时间", key:"created_at"}
+            ], (pointsData.data || {}).items || []);
+            renderTable("filesBox", [
+                {label:"文件名", key:"file_name"},
+                {label:"哈希", key:"file_hash"},
+                {label:"大小(MB)", key:"size"},
+                {label:"权限", key:"visibility"},
+                {label:"下载", render:(row) => row.download_url || ""}
+            ], files.data || []);
+            renderTable("sharesBox", [
+                {label:"分享码", key:"share_code"},
+                {label:"文件", key:"file_name"},
+                {label:"链接", render:(row) => `/s/${row.share_code || ""}`},
+                {label:"提取码", render:(row) => row.extract_code_required ? "需要" : "无"},
+                {label:"下载", render:(row) => `${row.download_count || 0}/${row.max_downloads || 0}`}
+            ], sharesData.data || []);
+            renderTable("withdrawalsBox", [
+                {label:"金额", key:"amount"},
+                {label:"状态", key:"status"},
+                {label:"钱包", key:"wallet_address"},
+                {label:"时间", key:"created_at"}
+            ], withdrawals.data || []);
+            showStatus("加载完成。");
+        }catch(error){
+            showStatus(`加载失败\\n${error.message}`);
+        }
+    }
+    document.getElementById("refreshButton").addEventListener("click", refreshDashboard);
+    document.getElementById("bindNonceButton").addEventListener("click", async () => {
+        try{
+            const payload = await apiPost("/api/wallet/nonce", {
+                wallet_address: document.getElementById("bindWalletAddress").value.trim(),
+                purpose: "bind"
+            });
+            document.getElementById("bindNonce").value = payload.nonce || "";
+            document.getElementById("bindMessage").textContent = payload.message || "";
+        }catch(error){ showStatus(`绑定 nonce 获取失败\\n${error.message}`); }
+    });
+    document.getElementById("bindWalletButton").addEventListener("click", async () => {
+        try{
+            await apiPost("/api/wallet/bind", {
+                wallet_address: document.getElementById("bindWalletAddress").value.trim(),
+                nonce: document.getElementById("bindNonce").value.trim(),
+                signature: document.getElementById("bindSignature").value.trim()
+            });
+            showStatus("钱包绑定成功。");
+            refreshDashboard();
+        }catch(error){ showStatus(`钱包绑定失败\\n${error.message}`); }
+    });
+    document.getElementById("withdrawButton").addEventListener("click", async () => {
+        try{
+            await apiPost("/api/user/withdrawals", {
+                amount: document.getElementById("withdrawAmount").value.trim()
+            });
+            showStatus("提现申请已提交。");
+            refreshDashboard();
+        }catch(error){ showStatus(`提现提交失败\\n${error.message}`); }
+    });
+    refreshDashboard();
+    </script>
+</body>
+</html>
+'''
+
+PUBLIC_SHARE_HTML = '''
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>文件分享</title>
+    <style>
+        body{font-family:Arial,"Microsoft YaHei",sans-serif;max-width:720px;margin:36px auto;padding:0 16px;background:#f7f8fb;color:#1f2937;}
+        .panel{background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:18px;margin-bottom:16px;}
+        label{display:grid;gap:6px;font-weight:600;margin:12px 0;}
+        input,button{font-size:15px;padding:10px;border:1px solid #d1d5db;border-radius:6px;}
+        button{background:#2563eb;color:#fff;border:0;cursor:pointer;}
+        .status{white-space:pre-wrap;background:#111827;color:#e5e7eb;border-radius:8px;padding:14px;min-height:54px;}
+        .meta{line-height:1.8;word-break:break-all;}
+    </style>
+</head>
+<body>
+    <h1>文件分享</h1>
+    <section class="panel" data-api-share="/api/share/{{ share_code }}">
+        <div id="shareMeta" class="meta">正在加载分享信息...</div>
+        <label id="extractCodeLabel" hidden>提取码
+            <input id="extractCodeInput" name="extract_code" autocomplete="off">
+        </label>
+        <button id="downloadButton">下载</button>
+    </section>
+    <pre id="statusBox" class="status">等待下载...</pre>
+    <script>
+    const shareCode = "{{ share_code }}";
+    const statusBox = document.getElementById("statusBox");
+    const shareMeta = document.getElementById("shareMeta");
+    const extractCodeLabel = document.getElementById("extractCodeLabel");
+    function esc(value){
+        return String(value == null ? "" : value).replace(/[&<>"']/g, (ch) => ({
+            "&":"&amp;","<":"&lt;",">":"&gt;","\\"":"&quot;","'":"&#39;"
+        }[ch]));
+    }
+    function showStatus(message){ statusBox.textContent = message; }
+    async function loadShare(){
+        try{
+            const response = await fetch(`/api/share/${encodeURIComponent(shareCode)}`);
+            const payload = await response.json();
+            if(!response.ok){ throw new Error(payload.msg || response.statusText); }
+            const data = payload.data || {};
+            shareMeta.innerHTML = `文件：${esc(data.file_name || "")}<br>大小(MB)：${esc(data.file_size || 0)}<br>下载次数：${esc(data.download_count || 0)} / ${esc(data.max_downloads || 0)}<br>过期时间：${esc(data.expires_at || "不限")}`;
+            extractCodeLabel.hidden = !data.extract_code_required;
+            showStatus(data.extract_code_required ? "请输入提取码后下载。" : "分享可直接下载。");
+        }catch(error){
+            shareMeta.textContent = "分享不可用";
+            showStatus(`加载失败\\n${error.message}`);
+        }
+    }
+    document.getElementById("downloadButton").addEventListener("click", async () => {
+        const code = document.getElementById("extractCodeInput").value.trim();
+        const query = code ? `?extract_code=${encodeURIComponent(code)}` : "";
+        window.location.href = `/api/share/${encodeURIComponent(shareCode)}/download${query}`;
+    });
+    loadShare();
     </script>
 </body>
 </html>
@@ -1720,6 +2203,21 @@ def admin_index():
 @app.route("/user/upload")
 def user_upload_page():
     return render_template_string(USER_UPLOAD_HTML)
+
+
+@app.route("/user/login")
+def user_login_page():
+    return render_template_string(USER_LOGIN_HTML)
+
+
+@app.route("/user/dashboard")
+def user_dashboard_page():
+    return render_template_string(USER_DASHBOARD_HTML)
+
+
+@app.route("/s/<share_code>")
+def public_share_page(share_code):
+    return render_template_string(PUBLIC_SHARE_HTML, share_code=share_code)
 
 
 @app.route("/api/health")

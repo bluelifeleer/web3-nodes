@@ -92,6 +92,37 @@ python3 node_mac.py invite=你的推广码
 - 删除文件记录（软删除，不直接删除 IPFS 内容）
 - 查看副本健康状态和 IPFS 节点状态
 上传页可选择公开下载或私有下载。私有文件需要下载链接中的 token 才能取回。
+
+User File Product
+用户文件产品使用独立的用户 Token，不影响后台 Token 和现有管理端上传流程。
+
+1. 注册 / 登录
+- 打开 `/user/login`。
+- 使用“注册”表单创建用户名和密码，或使用“用户名密码登录”表单登录。
+- 登录成功后页面会把接口返回的 `token` 保存到浏览器 `localStorage.user_token`，后续 `/user/dashboard` 和 `/user/upload` 会自动使用它。
+
+2. 钱包绑定 / 钱包登录
+- 已登录用户进入 `/user/dashboard`，在“钱包绑定”区域填写钱包地址。
+- 点击“获取绑定 nonce”，用钱包签名页面显示的 message，把 nonce 和签名填回表单后提交绑定。
+- 绑定后可回到 `/user/login` 的“钱包登录”区域，获取登录 nonce，签名后通过钱包登录。
+
+3. 上传
+- 打开 `/user/upload`。
+- 页面从 `localStorage.user_token` 读取用户 Token，并把文件上传到 `/api/user/files`。
+- 上传成功后会显示 `file_hash` 和原始下载地址；后台管理上传页 `upload.html` 与 `/api/upload_file` 仍走原后台 Token 流程。
+
+4. 分享链接
+- 在 `/user/upload` 上传成功后，可填写提取码、过期时间、下载次数限制，然后创建分享。
+- 分享创建接口为 `/api/user/files/<file_hash>/shares`。
+- 页面会展示公开分享链接 `/s/<share_code>`。
+- 访问 `/s/<share_code>` 时页面会读取 `/api/share/<share_code>`，如果分享需要提取码，会在页面内显示输入框，不使用弹窗。
+- 点击“下载”会调用 `/api/share/<share_code>/download`，并在需要时附带 `extract_code`。
+- 分享支持提取码、过期时间、下载次数限制；过期或次数用完后下载接口会拒绝访问。
+
+5. 积分和提现
+- `/user/dashboard` 会汇总调用 `/api/user/files`、`/api/user/shares`、`/api/user/points`、`/api/user/earnings`、`/api/user/withdrawals`。
+- 用户可查看文件、分享、积分流水、累计收益、可提现余额和提现记录。
+- 已绑定钱包且可提现余额足够时，可在用户面板提交提现申请，后台仍通过管理端提现审核接口处理。
 第九步：常见报错精准排错（解决你所有问题）
 报错1：网页打不开 / URL错误
 原因：服务没启动成功 / 数据库连接失败直接闪退
