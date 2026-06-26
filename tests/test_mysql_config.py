@@ -174,6 +174,25 @@ class MysqlConfigTest(unittest.TestCase):
 
         self.assertEqual(result, (False, 410, "分享已过期"))
 
+    def test_parse_share_expires_at_normalizes_aware_datetime_to_local_naive(self):
+        datetime_module = importlib.import_module("datetime")
+        server_main = load_server_main()
+        aware = datetime_module.datetime(
+            2026,
+            6,
+            27,
+            3,
+            0,
+            0,
+            tzinfo=datetime_module.timezone.utc,
+        )
+
+        parsed, error = server_main.parse_share_expires_at(aware.isoformat())
+
+        self.assertIsNone(error)
+        self.assertIsNone(parsed.tzinfo)
+        self.assertEqual(parsed, aware.astimezone().replace(tzinfo=None))
+
     def test_wallet_login_message_contains_nonce_and_purpose(self):
         auth = importlib.import_module("auth")
 
@@ -1930,6 +1949,58 @@ class MysqlConfigTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 404)
         self.assertEqual(response.get_json()["msg"], "分享不存在")
+
+    def test_update_share_persists_offset_expiry_as_local_naive_datetime(self):
+        auth = importlib.import_module("auth")
+        datetime_module = importlib.import_module("datetime")
+        server_main = load_server_main(SESSION_SECRET="session-secret")
+        token = auth.create_session_token({"user_id": 7, "username": "alice"}, "session-secret")
+        aware = datetime_module.datetime(
+            2026,
+            6,
+            27,
+            3,
+            0,
+            0,
+            tzinfo=datetime_module.timezone.utc,
+        )
+
+        class FakeCursor:
+            def __init__(self):
+                self.executed = []
+                self.last_sql = ""
+                self.rowcount = 1
+
+            def execute(self, sql, params=None):
+                self.last_sql = sql
+                self.executed.append((sql, params))
+
+            def fetchone(self):
+                if "from app_user" in self.last_sql:
+                    return (7, "alice", "hash", "0xabc", "active")
+                if "from file_share" in self.last_sql:
+                    return ("share123",)
+                return None
+
+        fake_cursor = FakeCursor()
+        server_main.cursor = fake_cursor
+        server_main.db = types.SimpleNamespace(commit=lambda: None)
+        server_main.init_db = lambda: True
+
+        response = server_main.app.test_client().patch(
+            "/api/user/shares/share123",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"expires_at": aware.isoformat()},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        update_params = [
+            params for sql, params in fake_cursor.executed
+            if sql.strip().lower().startswith("update file_share")
+        ][0]
+        persisted_expires_at = update_params[0]
+        self.assertIsNone(persisted_expires_at.tzinfo)
+        self.assertEqual(persisted_expires_at, aware.astimezone().replace(tzinfo=None))
 
     def test_public_share_missing_returns_json_404(self):
         server_main = load_server_main()

@@ -51,7 +51,7 @@ def parse_datetime(value):
             return None
 
 
-def _as_local_naive(value):
+def normalize_to_local_naive(value):
     if value and value.tzinfo is not None:
         return value.astimezone().replace(tzinfo=None)
     return value
@@ -60,7 +60,7 @@ def _as_local_naive(value):
 def validate_share_access(share):
     if not share or str(share.get("status") or "").lower() != "active":
         return False, 404, "分享不存在"
-    expires_at = _as_local_naive(parse_datetime(share.get("expires_at")))
+    expires_at = normalize_to_local_naive(parse_datetime(share.get("expires_at")))
     if expires_at and expires_at <= datetime.now():
         return False, 410, "分享已过期"
     max_downloads = int(share.get("max_downloads") or 0)

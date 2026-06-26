@@ -618,7 +618,7 @@ def parse_share_expires_at(value):
     parsed = shares.parse_datetime(value)
     if parsed is None:
         return None, "expires_at 格式无效"
-    return parsed, None
+    return shares.normalize_to_local_naive(parsed), None
 
 
 def parse_non_negative_int(value, field_name):
