@@ -140,3 +140,13 @@ CREATE TABLE IF NOT EXISTS withdrawal_request (
     created_at timestamp DEFAULT CURRENT_TIMESTAMP,
     reviewed_at timestamp DEFAULT NULL
 );
+
+CREATE INDEX IF NOT EXISTS idx_wallet_nonce_address ON wallet_nonce (wallet_address);
+CREATE INDEX IF NOT EXISTS idx_file_share_file ON file_share (file_hash);
+CREATE INDEX IF NOT EXISTS idx_file_share_owner ON file_share (owner_user_id);
+CREATE INDEX IF NOT EXISTS idx_download_file ON file_download_log (file_hash);
+CREATE INDEX IF NOT EXISTS idx_download_share ON file_download_log (share_code);
+CREATE INDEX IF NOT EXISTS idx_point_user ON point_ledger (user_id);
+CREATE INDEX IF NOT EXISTS idx_point_wallet ON point_ledger (wallet_address);
+CREATE INDEX IF NOT EXISTS idx_withdrawal_user ON withdrawal_request (user_id);
+CREATE INDEX IF NOT EXISTS idx_withdrawal_status ON withdrawal_request (status);

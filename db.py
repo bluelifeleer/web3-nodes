@@ -153,7 +153,8 @@ USER_PRODUCT_MYSQL_TABLES = [
   `expires_at` datetime NOT NULL,
   `used_at` datetime DEFAULT NULL,
   `created_at` datetime DEFAULT CURRENT_TIMESTAMP,
-  PRIMARY KEY (`id`)
+  PRIMARY KEY (`id`),
+  KEY `idx_wallet_nonce_address` (`wallet_address`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4""",
     """CREATE TABLE IF NOT EXISTS `file_share` (
   `id` int NOT NULL AUTO_INCREMENT,
@@ -168,7 +169,9 @@ USER_PRODUCT_MYSQL_TABLES = [
   `status` varchar(16) DEFAULT 'active',
   `created_at` datetime DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
-  UNIQUE KEY `idx_file_share_code` (`share_code`)
+  UNIQUE KEY `idx_file_share_code` (`share_code`),
+  KEY `idx_file_share_file` (`file_hash`),
+  KEY `idx_file_share_owner` (`owner_user_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4""",
     """CREATE TABLE IF NOT EXISTS `file_download_log` (
   `id` int NOT NULL AUTO_INCREMENT,
@@ -179,7 +182,9 @@ USER_PRODUCT_MYSQL_TABLES = [
   `node_address` varchar(128) DEFAULT '',
   `file_size` decimal(18,6) DEFAULT 0,
   `created_at` datetime DEFAULT CURRENT_TIMESTAMP,
-  PRIMARY KEY (`id`)
+  PRIMARY KEY (`id`),
+  KEY `idx_download_file` (`file_hash`),
+  KEY `idx_download_share` (`share_code`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4""",
     """CREATE TABLE IF NOT EXISTS `point_ledger` (
   `id` int NOT NULL AUTO_INCREMENT,
@@ -191,7 +196,9 @@ USER_PRODUCT_MYSQL_TABLES = [
   `source_id` varchar(128) DEFAULT '',
   `remark` varchar(255) DEFAULT '',
   `created_at` datetime DEFAULT CURRENT_TIMESTAMP,
-  PRIMARY KEY (`id`)
+  PRIMARY KEY (`id`),
+  KEY `idx_point_user` (`user_id`),
+  KEY `idx_point_wallet` (`wallet_address`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4""",
     """CREATE TABLE IF NOT EXISTS `withdrawal_request` (
   `id` int NOT NULL AUTO_INCREMENT,
@@ -202,7 +209,9 @@ USER_PRODUCT_MYSQL_TABLES = [
   `admin_note` varchar(255) DEFAULT '',
   `created_at` datetime DEFAULT CURRENT_TIMESTAMP,
   `reviewed_at` datetime DEFAULT NULL,
-  PRIMARY KEY (`id`)
+  PRIMARY KEY (`id`),
+  KEY `idx_withdrawal_user` (`user_id`),
+  KEY `idx_withdrawal_status` (`status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4""",
 ]
 
@@ -284,6 +293,15 @@ SCHEMA_MIGRATIONS = [
     "ALTER TABLE file_chain_record ADD COLUMN download_count int DEFAULT 0",
     "ALTER TABLE file_chain_record ADD COLUMN last_download_at datetime DEFAULT NULL",
     *USER_PRODUCT_MYSQL_TABLES,
+    "CREATE INDEX idx_wallet_nonce_address ON wallet_nonce (wallet_address)",
+    "CREATE INDEX idx_file_share_file ON file_share (file_hash)",
+    "CREATE INDEX idx_file_share_owner ON file_share (owner_user_id)",
+    "CREATE INDEX idx_download_file ON file_download_log (file_hash)",
+    "CREATE INDEX idx_download_share ON file_download_log (share_code)",
+    "CREATE INDEX idx_point_user ON point_ledger (user_id)",
+    "CREATE INDEX idx_point_wallet ON point_ledger (wallet_address)",
+    "CREATE INDEX idx_withdrawal_user ON withdrawal_request (user_id)",
+    "CREATE INDEX idx_withdrawal_status ON withdrawal_request (status)",
 ]
 
 
@@ -299,6 +317,15 @@ POSTGRES_SCHEMA_MIGRATIONS = [
     "ALTER TABLE file_chain_record ADD COLUMN IF NOT EXISTS download_count integer DEFAULT 0",
     "ALTER TABLE file_chain_record ADD COLUMN IF NOT EXISTS last_download_at timestamp DEFAULT NULL",
     *USER_PRODUCT_POSTGRESQL_TABLES,
+    "CREATE INDEX IF NOT EXISTS idx_wallet_nonce_address ON wallet_nonce (wallet_address)",
+    "CREATE INDEX IF NOT EXISTS idx_file_share_file ON file_share (file_hash)",
+    "CREATE INDEX IF NOT EXISTS idx_file_share_owner ON file_share (owner_user_id)",
+    "CREATE INDEX IF NOT EXISTS idx_download_file ON file_download_log (file_hash)",
+    "CREATE INDEX IF NOT EXISTS idx_download_share ON file_download_log (share_code)",
+    "CREATE INDEX IF NOT EXISTS idx_point_user ON point_ledger (user_id)",
+    "CREATE INDEX IF NOT EXISTS idx_point_wallet ON point_ledger (wallet_address)",
+    "CREATE INDEX IF NOT EXISTS idx_withdrawal_user ON withdrawal_request (user_id)",
+    "CREATE INDEX IF NOT EXISTS idx_withdrawal_status ON withdrawal_request (status)",
 ]
 
 

@@ -233,6 +233,49 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertIn("`download_count` int DEFAULT 0", sql)
         self.assertIn("`last_download_at` datetime DEFAULT NULL", sql)
 
+    def test_user_product_indexes_exist_in_postgresql_init_sql_and_migrations(self):
+        sql = Path("init_postgresql.sql").read_text(encoding="utf-8")
+        server_main = load_server_main(DB_ENGINE="postgresql")
+        migrations = "\n".join(server_main.database_module.POSTGRES_SCHEMA_MIGRATIONS)
+
+        expected_indexes = (
+            ("idx_wallet_nonce_address", "wallet_nonce", "wallet_address"),
+            ("idx_file_share_file", "file_share", "file_hash"),
+            ("idx_file_share_owner", "file_share", "owner_user_id"),
+            ("idx_download_file", "file_download_log", "file_hash"),
+            ("idx_download_share", "file_download_log", "share_code"),
+            ("idx_point_user", "point_ledger", "user_id"),
+            ("idx_point_wallet", "point_ledger", "wallet_address"),
+            ("idx_withdrawal_user", "withdrawal_request", "user_id"),
+            ("idx_withdrawal_status", "withdrawal_request", "status"),
+        )
+
+        for index_name, table_name, column_name in expected_indexes:
+            expected = f"CREATE INDEX IF NOT EXISTS {index_name} ON {table_name} ({column_name})"
+            self.assertIn(expected, sql)
+            self.assertIn(expected, migrations)
+
+    def test_user_product_indexes_exist_in_mysql_init_sql_and_migrations(self):
+        sql = Path("init_mysql.sql").read_text(encoding="utf-8")
+        server_main = load_server_main(DB_ENGINE="mysql")
+        migrations = "\n".join(server_main.database_module.SCHEMA_MIGRATIONS)
+
+        expected_keys = (
+            ("idx_wallet_nonce_address", "wallet_address"),
+            ("idx_file_share_file", "file_hash"),
+            ("idx_file_share_owner", "owner_user_id"),
+            ("idx_download_file", "file_hash"),
+            ("idx_download_share", "share_code"),
+            ("idx_point_user", "user_id"),
+            ("idx_point_wallet", "wallet_address"),
+            ("idx_withdrawal_user", "user_id"),
+            ("idx_withdrawal_status", "status"),
+        )
+
+        for index_name, column_name in expected_keys:
+            self.assertIn(f"KEY `{index_name}` (`{column_name}`)", sql)
+            self.assertIn(f"CREATE INDEX {index_name}", migrations)
+
     def test_sql_dialect_helpers_switch_by_engine(self):
         mysql_server = load_server_main(DB_ENGINE="mysql")
         postgres_server = load_server_main(DB_ENGINE="postgresql")
