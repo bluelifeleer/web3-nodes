@@ -773,6 +773,15 @@ def calculate_user_earnings(user_id):
     }
 
 
+def lock_active_user_for_update(user_id):
+    active_cursor = current_cursor()
+    active_cursor.execute(
+        "select id from app_user where id=%s and status='active' for update",
+        (user_id,),
+    )
+    return active_cursor.fetchone()
+
+
 def atomic_increment_share_download_count(share_code):
     current_cursor().execute(
         """
@@ -2011,6 +2020,9 @@ def user_withdrawal_create():
 
     with DatabaseTransaction():
         try:
+            if not lock_active_user_for_update(user_id):
+                rollback_database()
+                return jsonify({"code":401,"msg":"用户不存在或已停用"}), 401
             summary = calculate_user_earnings(user_id)
             if amount > summary["available_earnings"]:
                 rollback_database()
@@ -2061,19 +2073,36 @@ def admin_withdrawal_review(withdrawal_id):
     if not ok:
         return jsonify({"code":400,"msg":message}), 400
     admin_note = str(data.get("admin_note") or "")[:255]
-    active_cursor = current_cursor()
-    active_cursor.execute(
-        """
-        update withdrawal_request
-        set status=%s,admin_note=%s,reviewed_at=%s
-        where id=%s
-        """,
-        (status,admin_note,datetime.now(),withdrawal_id),
-    )
-    if getattr(active_cursor, "rowcount", None) == 0:
-        rollback_database()
-        return jsonify({"code":404,"msg":"提现申请不存在"}), 404
-    commit_database()
+    with DatabaseTransaction():
+        try:
+            active_cursor = current_cursor()
+            active_cursor.execute(
+                "select id,status from withdrawal_request where id=%s for update",
+                (withdrawal_id,),
+            )
+            row = active_cursor.fetchone()
+            if not row:
+                rollback_database()
+                return jsonify({"code":404,"msg":"提现申请不存在"}), 404
+            transition_ok, transition_message = withdrawals.validate_status_transition(row[1], status)
+            if not transition_ok:
+                rollback_database()
+                return jsonify({"code":400,"msg":transition_message}), 400
+            active_cursor.execute(
+                """
+                update withdrawal_request
+                set status=%s,admin_note=%s,reviewed_at=%s
+                where id=%s
+                """,
+                (status,admin_note,datetime.now(),withdrawal_id),
+            )
+            if getattr(active_cursor, "rowcount", None) == 0:
+                rollback_database()
+                return jsonify({"code":404,"msg":"提现申请不存在"}), 404
+            commit_database()
+        except Exception:
+            rollback_database()
+            return jsonify({"code":500,"msg":"提现审核更新失败"}), 500
     return jsonify({"code":200,"msg":"提现审核已更新","data":{"id":withdrawal_id,"status":status}})
 
 

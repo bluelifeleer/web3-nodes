@@ -145,12 +145,22 @@ class MysqlConfigTest(unittest.TestCase):
 
         self.assertEqual(withdrawals.validate_withdrawal_amount(1), (True, "ok"))
         self.assertEqual(withdrawals.validate_withdrawal_amount(0), (False, "提现金额必须大于0"))
+        self.assertEqual(withdrawals.validate_withdrawal_amount(float("nan")), (False, "提现金额格式错误"))
+        self.assertEqual(withdrawals.validate_withdrawal_amount(float("inf")), (False, "提现金额格式错误"))
 
     def test_withdrawal_review_status_validation(self):
         withdrawals = importlib.import_module("withdrawals")
 
         self.assertEqual(withdrawals.validate_review_status("approved"), (True, "ok"))
         self.assertEqual(withdrawals.validate_review_status("unknown"), (False, "提现状态无效"))
+
+    def test_withdrawal_status_transition_validation(self):
+        withdrawals = importlib.import_module("withdrawals")
+
+        self.assertEqual(withdrawals.validate_status_transition("pending", "approved"), (True, "ok"))
+        self.assertEqual(withdrawals.validate_status_transition("approved", "paid"), (True, "ok"))
+        self.assertEqual(withdrawals.validate_status_transition("paid", "rejected"), (False, "提现状态不可从 paid 变更为 rejected"))
+        self.assertEqual(withdrawals.validate_status_transition("pending", "pending"), (False, "不能将提现审核为 pending"))
 
     def test_validate_share_access_rejects_expired_active_share(self):
         shares = importlib.import_module("shares")
@@ -1368,6 +1378,8 @@ class MysqlConfigTest(unittest.TestCase):
 
             def fetchone(self):
                 lowered = self.last_sql.lower()
+                if "from app_user" in lowered and "for update" in lowered:
+                    return (7,)
                 if "from app_user" in lowered:
                     return (7, "alice", "hash", "0xabc", "active")
                 if "from point_ledger" in lowered:
@@ -1394,6 +1406,56 @@ class MysqlConfigTest(unittest.TestCase):
             if sql.strip().lower().startswith("insert into withdrawal_request")
         ]
         self.assertEqual(insert_queries[-1][:3], (7, "0xabc", 1.5))
+        executed_sql = [sql.lower() for sql, _ in fake_cursor.executed]
+        lock_index = next(i for i, sql in enumerate(executed_sql) if "from app_user" in sql and "for update" in sql)
+        point_index = next(i for i, sql in enumerate(executed_sql) if "from point_ledger" in sql)
+        insert_index = next(i for i, sql in enumerate(executed_sql) if sql.strip().startswith("insert into withdrawal_request"))
+        self.assertLess(lock_index, point_index)
+        self.assertLess(lock_index, insert_index)
+
+    def test_user_withdrawal_over_withdraw_returns_400_without_insert(self):
+        auth = importlib.import_module("auth")
+        server_main = load_server_main(SESSION_SECRET="session-secret")
+        token = auth.create_session_token({"user_id": 7, "username": "alice"}, "session-secret")
+
+        class FakeCursor:
+            def __init__(self):
+                self.executed = []
+                self.last_sql = ""
+
+            def execute(self, sql, params=None):
+                self.last_sql = sql
+                self.executed.append((sql, params))
+
+            def fetchone(self):
+                lowered = self.last_sql.lower()
+                if "from app_user" in lowered and "for update" in lowered:
+                    return (7,)
+                if "from app_user" in lowered:
+                    return (7, "alice", "hash", "0xabc", "active")
+                if "from point_ledger" in lowered:
+                    return (100,)
+                if "from withdrawal_request" in lowered:
+                    return (0,)
+                return None
+
+        fake_cursor = FakeCursor()
+        server_main.cursor = fake_cursor
+        server_main.db = types.SimpleNamespace(commit=lambda: None, rollback=lambda: None)
+        server_main.init_db = lambda: True
+
+        response = server_main.app.test_client().post(
+            "/api/user/withdrawals",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"amount": 2},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.get_json()["msg"], "可提现余额不足")
+        self.assertFalse(any(
+            sql.strip().lower().startswith("insert into withdrawal_request")
+            for sql, _ in fake_cursor.executed
+        ))
 
     def test_admin_withdrawals_requires_admin_token(self):
         server_main = load_server_main(ADMIN_API_TOKEN="secret-token")
@@ -1402,6 +1464,82 @@ class MysqlConfigTest(unittest.TestCase):
         response = server_main.app.test_client().get("/api/admin/withdrawals")
 
         self.assertEqual(response.status_code, 401)
+
+    def test_admin_withdrawal_review_rejects_invalid_transitions(self):
+        server_main = load_server_main(ADMIN_API_TOKEN="secret-token")
+
+        class FakeCursor:
+            def __init__(self, current_status):
+                self.current_status = current_status
+                self.last_sql = ""
+                self.executed = []
+                self.rowcount = 1
+
+            def execute(self, sql, params=None):
+                self.last_sql = sql
+                self.executed.append((sql, params))
+
+            def fetchone(self):
+                if "from withdrawal_request" in self.last_sql.lower():
+                    return (9, self.current_status)
+                return None
+
+        for current_status, target_status in (("paid", "rejected"), ("pending", "pending")):
+            fake_cursor = FakeCursor(current_status)
+            server_main.cursor = fake_cursor
+            server_main.db = types.SimpleNamespace(commit=lambda: None, rollback=lambda: None)
+            server_main.init_db = lambda: True
+
+            response = server_main.app.test_client().post(
+                "/api/admin/withdrawals/9/review",
+                headers={"X-Admin-Token": "secret-token"},
+                json={"status": target_status},
+            )
+
+            self.assertEqual(response.status_code, 400)
+            self.assertFalse(any(
+                sql.strip().lower().startswith("update withdrawal_request")
+                for sql, _ in fake_cursor.executed
+            ))
+
+    def test_admin_withdrawal_review_allows_valid_transitions(self):
+        server_main = load_server_main(ADMIN_API_TOKEN="secret-token")
+
+        class FakeCursor:
+            def __init__(self, current_status):
+                self.current_status = current_status
+                self.last_sql = ""
+                self.executed = []
+                self.rowcount = 1
+
+            def execute(self, sql, params=None):
+                self.last_sql = sql
+                self.executed.append((sql, params))
+
+            def fetchone(self):
+                if "from withdrawal_request" in self.last_sql.lower():
+                    return (9, self.current_status)
+                return None
+
+        for current_status, target_status in (("pending", "approved"), ("approved", "paid")):
+            fake_cursor = FakeCursor(current_status)
+            server_main.cursor = fake_cursor
+            server_main.db = types.SimpleNamespace(commit=lambda: None, rollback=lambda: None)
+            server_main.init_db = lambda: True
+
+            response = server_main.app.test_client().post(
+                "/api/admin/withdrawals/9/review",
+                headers={"X-Admin-Token": "secret-token"},
+                json={"status": target_status},
+            )
+
+            self.assertEqual(response.status_code, 200)
+            update_params = [
+                params
+                for sql, params in fake_cursor.executed
+                if sql.strip().lower().startswith("update withdrawal_request")
+            ]
+            self.assertEqual(update_params[-1][0], target_status)
 
     def test_user_upload_page_posts_to_user_file_api_with_bearer_token(self):
         server_main = load_server_main(SESSION_SECRET="session-secret")
