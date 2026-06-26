@@ -3,11 +3,6 @@ import time
 import hashlib
 import random
 from datetime import datetime
-import pymysql
-try:
-    import psycopg
-except ImportError:
-    psycopg = None
 import requests
 from flask import Flask, request, jsonify, render_template_string, g
 from pathlib import Path
@@ -25,72 +20,25 @@ try:
     import reedsolo
 except ImportError:
     reedsolo = None
+from db import (
+    BASE_DIR,
+    DB_CONFIG,
+    DB_ENGINE,
+    INIT_SQL_PATH,
+    connect_database,
+    current_cursor as get_current_cursor,
+    ensure_database_initialized,
+    load_env_file,
+    node_alive_interval_sql,
+    node_location_upsert_sql,
+    reward_upsert_sql,
+)
 
 # ==================== 初始化Flask服务 ====================
 app = Flask(__name__)
 
-BASE_DIR = Path(__file__).resolve().parent
-
-
-def load_env_file(env_path=None):
-    env_path = Path(env_path) if env_path else BASE_DIR / ".env"
-    if not env_path.exists():
-        return False
-
-    for line in env_path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        key = key.strip()
-        value = value.strip().strip('"').strip("'")
-        if key:
-            os.environ.setdefault(key, value)
-    return True
-
-
-if os.getenv("WEB3_NODES_SKIP_DOTENV") != "1":
-    load_env_file()
-
-# ==================== 数据库配置 ====================
-# DB_ENGINE=postgresql|mysql，默认 PostgreSQL；保留 MYSQL_* 兼容旧部署。
-def get_env(primary_key, legacy_key, default):
-    return os.getenv(primary_key) or os.getenv(legacy_key) or default
-
-
-DB_ENGINE = os.getenv("DB_ENGINE", "postgresql").strip().lower()
-if DB_ENGINE not in ("postgresql", "mysql"):
-    DB_ENGINE = "postgresql"
-
-
-def build_db_config():
-    if DB_ENGINE == "mysql":
-        return {
-            "host": get_env("MYSQL_HOST", "DB_HOST", "127.0.0.1"),
-            "user": get_env("MYSQL_USER", "DB_USER", "root"),
-            "password": get_env("MYSQL_PASSWORD", "DB_PASSWORD", ""),
-            "database": get_env("MYSQL_DB_NAME", "DB_NAME", "web3_modes_store"),
-            "port": int(get_env("MYSQL_PORT", "DB_PORT", "3306")),
-            "charset": "utf8mb4",
-            "autocommit": True,
-            "connect_timeout": 3,
-            "read_timeout": 10,
-            "write_timeout": 10,
-        }
-    return {
-        "host": get_env("POSTGRES_HOST", "DB_HOST", "127.0.0.1"),
-        "user": get_env("POSTGRES_USER", "DB_USER", "postgres"),
-        "password": get_env("POSTGRES_PASSWORD", "DB_PASSWORD", ""),
-        "database": get_env("POSTGRES_DB_NAME", "DB_NAME", "web3_modes_store"),
-        "port": int(get_env("POSTGRES_PORT", "DB_PORT", "5432")),
-        "connect_timeout": 3,
-    }
-
-
-DB_CONFIG = build_db_config()
 ADMIN_API_TOKEN = os.getenv("ADMIN_API_TOKEN", "")
 MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_MB", "100")) * 1024 * 1024
-INIT_SQL_PATH = BASE_DIR / ("init_mysql.sql" if DB_ENGINE == "mysql" else "init_postgresql.sql")
 app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_BYTES
 db = None
 cursor = None
@@ -117,156 +65,7 @@ def init_db():
 
 
 def current_cursor():
-    try:
-        request_cursor = getattr(g, "cursor", None)
-    except RuntimeError:
-        request_cursor = None
-    return request_cursor or cursor
-
-
-def connect_database(config):
-    if DB_ENGINE == "mysql":
-        return pymysql.connect(**config)
-    if psycopg is None:
-        raise RuntimeError("缺少 psycopg 依赖，请执行：pip install psycopg[binary]")
-    pg_config = {
-        "host": config["host"],
-        "port": config["port"],
-        "user": config["user"],
-        "password": config["password"],
-        "dbname": config["database"],
-        "connect_timeout": config.get("connect_timeout", 3),
-    }
-    connection = psycopg.connect(**pg_config)
-    connection.autocommit = True
-    return connection
-
-
-def server_config(database=None):
-    config = DB_CONFIG.copy()
-    if DB_ENGINE == "mysql":
-        config.pop("database", None)
-    else:
-        config["database"] = database or "postgres"
-    return config
-
-
-def split_sql_statements(sql_text):
-    statements = []
-    current = []
-    for line in sql_text.splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("--"):
-            continue
-        current.append(line)
-        if stripped.endswith(";"):
-            statements.append("\n".join(current).rstrip(";").strip())
-            current = []
-    if current:
-        statements.append("\n".join(current).strip())
-    return statements
-
-
-SCHEMA_MIGRATIONS = [
-    "ALTER TABLE node_reward ADD COLUMN source_user_address varchar(64) DEFAULT '' COMMENT '收益来源节点'",
-    "ALTER TABLE node_reward ADD COLUMN settle_date date DEFAULT NULL COMMENT '结算日期，防重复结算'",
-    "ALTER TABLE node_reward ADD UNIQUE KEY idx_reward_once (user_address,reward_type,source_user_address,settle_date)",
-    "ALTER TABLE file_chain_record ADD COLUMN visibility varchar(16) DEFAULT 'public' COMMENT 'public公开 private凭token访问'",
-    "ALTER TABLE file_chain_record ADD COLUMN access_token varchar(64) DEFAULT '' COMMENT '私有文件访问令牌'",
-    "ALTER TABLE file_chain_record ADD COLUMN deleted_at datetime DEFAULT NULL COMMENT '软删除时间'",
-]
-
-POSTGRES_SCHEMA_MIGRATIONS = [
-    "ALTER TABLE node_reward ADD COLUMN IF NOT EXISTS source_user_address varchar(64) DEFAULT ''",
-    "ALTER TABLE node_reward ADD COLUMN IF NOT EXISTS settle_date date DEFAULT NULL",
-    "CREATE UNIQUE INDEX IF NOT EXISTS idx_reward_once ON node_reward (user_address,reward_type,source_user_address,settle_date)",
-    "ALTER TABLE file_chain_record ADD COLUMN IF NOT EXISTS visibility varchar(16) DEFAULT 'public'",
-    "ALTER TABLE file_chain_record ADD COLUMN IF NOT EXISTS access_token varchar(64) DEFAULT ''",
-    "ALTER TABLE file_chain_record ADD COLUMN IF NOT EXISTS deleted_at timestamp DEFAULT NULL",
-]
-
-
-def reward_upsert_sql():
-    if DB_ENGINE == "postgresql":
-        return """
-            insert into node_reward(user_address,reward_type,reward_amount,node_contribution,source_user_address,settle_date)
-            values(%s,%s,%s,%s,%s,%s)
-            ON CONFLICT (user_address,reward_type,source_user_address,settle_date) DO UPDATE SET
-            reward_amount=EXCLUDED.reward_amount,node_contribution=EXCLUDED.node_contribution,settle_time=CURRENT_TIMESTAMP
-            """
-    return """
-            insert into node_reward(user_address,reward_type,reward_amount,node_contribution,source_user_address,settle_date)
-            values(%s,%s,%s,%s,%s,%s)
-            ON DUPLICATE KEY UPDATE
-            reward_amount=VALUES(reward_amount),node_contribution=VALUES(node_contribution),settle_time=CURRENT_TIMESTAMP
-            """
-
-
-def node_location_upsert_sql():
-    if DB_ENGINE == "postgresql":
-        return """
-    INSERT INTO node_location(user_address,node_mac,ip_addr,country,province,city,lat,lng,online_status)
-    VALUES(%s,%s,%s,%s,%s,%s,%s,%s,1)
-    ON CONFLICT (node_mac) DO UPDATE SET
-    user_address=EXCLUDED.user_address,ip_addr=EXCLUDED.ip_addr,country=EXCLUDED.country,province=EXCLUDED.province,
-    city=EXCLUDED.city,lat=EXCLUDED.lat,lng=EXCLUDED.lng,online_status=1,update_time=CURRENT_TIMESTAMP
-    """
-    return """
-    INSERT INTO node_location(user_address,node_mac,ip_addr,country,province,city,lat,lng,online_status)
-    VALUES(%s,%s,%s,%s,%s,%s,%s,%s,1)
-    ON DUPLICATE KEY UPDATE
-    ip_addr=%s,country=%s,province=%s,city=%s,lat=%s,lng=%s,online_status=1
-    """
-
-
-def node_alive_interval_sql(minutes=3):
-    if DB_ENGINE == "postgresql":
-        return f"NOW() - INTERVAL '{int(minutes)} minutes'"
-    return f"NOW() - INTERVAL {int(minutes)} MINUTE"
-
-
-def ensure_database_initialized(sql_path=INIT_SQL_PATH):
-    global db_error
-    try:
-        if DB_ENGINE == "postgresql":
-            ensure_postgresql_database_exists()
-        sql_text = Path(sql_path).read_text(encoding="utf-8")
-        statements = split_sql_statements(sql_text)
-        connection = connect_database(DB_CONFIG if DB_ENGINE == "postgresql" else server_config())
-        try:
-            init_cursor = connection.cursor()
-            for statement in statements:
-                init_cursor.execute(statement)
-            for statement in (POSTGRES_SCHEMA_MIGRATIONS if DB_ENGINE == "postgresql" else SCHEMA_MIGRATIONS):
-                try:
-                    init_cursor.execute(statement)
-                except Exception:
-                    pass
-            if DB_ENGINE == "postgresql":
-                connection.commit()
-        finally:
-            connection.close()
-        db_error = ""
-        return True
-    except Exception as exc:
-        db_error = str(exc)
-        return False
-
-
-def ensure_postgresql_database_exists():
-    if DB_ENGINE != "postgresql":
-        return True
-    connection = connect_database(server_config(database="postgres"))
-    try:
-        connection.autocommit = True
-        init_cursor = connection.cursor()
-        init_cursor.execute("SELECT 1 FROM pg_database WHERE datname=%s", (DB_CONFIG["database"],))
-        if not init_cursor.fetchone():
-            database_name = DB_CONFIG["database"].replace('"', '""')
-            init_cursor.execute(f'CREATE DATABASE "{database_name}"')
-    finally:
-        connection.close()
-    return True
+    return get_current_cursor(cursor)
 
 
 ADMIN_PROTECTED_PATHS = {

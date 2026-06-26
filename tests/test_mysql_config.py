@@ -35,6 +35,7 @@ def load_server_main(**env):
     old_pymysql = sys.modules.get("pymysql")
     old_psycopg = sys.modules.get("psycopg")
     old_requests = sys.modules.get("requests")
+    old_db = sys.modules.get("db")
 
     class FakeResponse:
         def json(self):
@@ -59,8 +60,13 @@ def load_server_main(**env):
             get=lambda url, timeout: FakeResponse()
         )
         sys.modules.pop("server_main", None)
+        sys.modules.pop("db", None)
         return importlib.import_module("server_main")
     finally:
+        if old_db is None:
+            sys.modules.pop("db", None)
+        else:
+            sys.modules["db"] = old_db
         if old_pymysql is None:
             sys.modules.pop("pymysql", None)
         else:
@@ -191,6 +197,42 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertIn("CREATE TABLE IF NOT EXISTS file_chain_record", sql)
         self.assertIn("visibility varchar(16)", sql)
 
+    def test_user_product_tables_exist_in_postgresql_init_sql(self):
+        sql = Path("init_postgresql.sql").read_text(encoding="utf-8")
+
+        for table_name in (
+            "app_user",
+            "wallet_nonce",
+            "file_share",
+            "file_download_log",
+            "point_ledger",
+            "withdrawal_request",
+        ):
+            self.assertIn(f"CREATE TABLE IF NOT EXISTS {table_name}", sql)
+
+        self.assertIn("owner_user_id integer", sql)
+        self.assertIn("owner_wallet_address varchar(128)", sql)
+        self.assertIn("download_count integer DEFAULT 0", sql)
+        self.assertIn("last_download_at timestamp DEFAULT NULL", sql)
+
+    def test_user_product_tables_exist_in_mysql_init_sql(self):
+        sql = Path("init_mysql.sql").read_text(encoding="utf-8")
+
+        for table_name in (
+            "app_user",
+            "wallet_nonce",
+            "file_share",
+            "file_download_log",
+            "point_ledger",
+            "withdrawal_request",
+        ):
+            self.assertIn(f"CREATE TABLE IF NOT EXISTS `{table_name}`", sql)
+
+        self.assertIn("`owner_user_id` int DEFAULT NULL", sql)
+        self.assertIn("`owner_wallet_address` varchar(128) DEFAULT ''", sql)
+        self.assertIn("`download_count` int DEFAULT 0", sql)
+        self.assertIn("`last_download_at` datetime DEFAULT NULL", sql)
+
     def test_sql_dialect_helpers_switch_by_engine(self):
         mysql_server = load_server_main(DB_ENGINE="mysql")
         postgres_server = load_server_main(DB_ENGINE="postgresql")
@@ -233,12 +275,38 @@ class MysqlConfigTest(unittest.TestCase):
             calls.append(kwargs)
             return FakeConnection()
 
-        server_main.pymysql.connect = fake_connect
+        server_main.connect_database.__globals__["pymysql"].connect = fake_connect
 
         self.assertTrue(server_main.ensure_database_initialized())
         self.assertNotIn("database", calls[0])
         self.assertTrue(any("CREATE DATABASE IF NOT EXISTS" in sql for sql in calls))
         self.assertTrue(any("CREATE TABLE IF NOT EXISTS `user_node`" in sql for sql in calls))
+
+    def test_mysql_initializer_ignores_duplicate_file_column_alters(self):
+        server_main = load_server_main(DB_ENGINE="mysql")
+        calls = []
+
+        class FakeCursor:
+            def execute(self, sql):
+                calls.append(sql)
+                if sql.startswith("ALTER TABLE `file_chain_record` ADD COLUMN `owner_user_id`"):
+                    raise Exception("Duplicate column name 'owner_user_id'")
+
+        class FakeConnection:
+            def cursor(self):
+                return FakeCursor()
+
+            def close(self):
+                calls.append("close")
+
+        def fake_connect(**kwargs):
+            calls.append(kwargs)
+            return FakeConnection()
+
+        server_main.connect_database.__globals__["pymysql"].connect = fake_connect
+
+        self.assertTrue(server_main.ensure_database_initialized())
+        self.assertIn("close", calls)
 
     def test_admin_api_requires_token_before_mutation(self):
         server_main = load_server_main(ADMIN_API_TOKEN="secret-token")

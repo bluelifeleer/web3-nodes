@@ -71,3 +71,84 @@ CREATE TABLE IF NOT EXISTS `node_location` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `idx_node_mac` (`node_mac`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='节点地理位置地图数据表';
+
+ALTER TABLE `file_chain_record` ADD COLUMN `owner_user_id` int DEFAULT NULL;
+ALTER TABLE `file_chain_record` ADD COLUMN `owner_wallet_address` varchar(128) DEFAULT '';
+ALTER TABLE `file_chain_record` ADD COLUMN `download_count` int DEFAULT 0;
+ALTER TABLE `file_chain_record` ADD COLUMN `last_download_at` datetime DEFAULT NULL;
+
+CREATE TABLE IF NOT EXISTS `app_user` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `username` varchar(64) NOT NULL,
+  `password_hash` varchar(255) NOT NULL,
+  `wallet_address` varchar(128) DEFAULT NULL,
+  `status` varchar(16) DEFAULT 'active',
+  `created_at` datetime DEFAULT CURRENT_TIMESTAMP,
+  `last_login_at` datetime DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `idx_app_user_username` (`username`),
+  UNIQUE KEY `idx_app_user_wallet` (`wallet_address`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS `wallet_nonce` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `wallet_address` varchar(128) NOT NULL,
+  `nonce` varchar(128) NOT NULL,
+  `expires_at` datetime NOT NULL,
+  `used_at` datetime DEFAULT NULL,
+  `created_at` datetime DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS `file_share` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `share_code` varchar(32) NOT NULL,
+  `file_hash` varchar(128) NOT NULL,
+  `owner_user_id` int NOT NULL,
+  `visibility` varchar(16) DEFAULT 'public',
+  `extract_code_hash` varchar(255) DEFAULT '',
+  `expires_at` datetime DEFAULT NULL,
+  `max_downloads` int DEFAULT 0,
+  `download_count` int DEFAULT 0,
+  `status` varchar(16) DEFAULT 'active',
+  `created_at` datetime DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `idx_file_share_code` (`share_code`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS `file_download_log` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `share_code` varchar(32) DEFAULT '',
+  `file_hash` varchar(128) NOT NULL,
+  `downloader_ip` varchar(64) DEFAULT '',
+  `downloader_user_id` int DEFAULT NULL,
+  `node_address` varchar(128) DEFAULT '',
+  `file_size` decimal(18,6) DEFAULT 0,
+  `created_at` datetime DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS `point_ledger` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `user_id` int DEFAULT NULL,
+  `wallet_address` varchar(128) DEFAULT '',
+  `point_type` varchar(32) NOT NULL,
+  `amount` decimal(18,6) NOT NULL,
+  `source_type` varchar(32) DEFAULT '',
+  `source_id` varchar(128) DEFAULT '',
+  `remark` varchar(255) DEFAULT '',
+  `created_at` datetime DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS `withdrawal_request` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `user_id` int NOT NULL,
+  `wallet_address` varchar(128) NOT NULL,
+  `amount` decimal(18,6) NOT NULL,
+  `status` varchar(16) DEFAULT 'pending',
+  `admin_note` varchar(255) DEFAULT '',
+  `created_at` datetime DEFAULT CURRENT_TIMESTAMP,
+  `reviewed_at` datetime DEFAULT NULL,
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
