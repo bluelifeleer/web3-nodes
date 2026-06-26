@@ -11,6 +11,7 @@ import re
 import secrets
 import urllib.parse
 import auth
+import shares
 from files import USER_FILE_SELECT_PROJECTION, format_user_file_record
 try:
     from Crypto.Cipher import AES
@@ -593,6 +594,53 @@ def format_file_record(item):
 
 def format_user_file_records(rows):
     return [format_user_file_record(row) for row in rows]
+
+
+SAFE_SHARE_CODE_RE = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
+
+
+def validate_share_code(share_code):
+    return isinstance(share_code, str) and bool(SAFE_SHARE_CODE_RE.fullmatch(share_code))
+
+
+def normalize_share_status(value, allow_deleted=False):
+    status = str(value or "active").strip().lower()
+    allowed = {"active", "inactive"}
+    if allow_deleted:
+        allowed.add("deleted")
+    return status if status in allowed else None
+
+
+def parse_share_expires_at(value):
+    if value in (None, ""):
+        return None, None
+    parsed = shares.parse_datetime(value)
+    if parsed is None:
+        return None, "expires_at 格式无效"
+    return parsed, None
+
+
+def parse_non_negative_int(value, field_name):
+    if value in (None, ""):
+        return 0, None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return 0, f"{field_name} 必须是非负整数"
+    if parsed < 0:
+        return 0, f"{field_name} 必须是非负整数"
+    return parsed, None
+
+
+def select_share_row(share_code):
+    current_cursor().execute(f"""
+    select {shares.SHARE_SELECT_PROJECTION}
+    from file_share s
+    join file_chain_record f on f.file_hash=s.file_hash and f.deleted_at is null
+    where s.share_code=%s
+    limit 1
+    """,(share_code,))
+    return current_cursor().fetchone()
 
 
 def filter_file_records(rows, keyword="", page=1, page_size=20):
@@ -1828,6 +1876,193 @@ def user_file_delete(file_hash):
     if getattr(active_cursor, "rowcount", None) == 0:
         return jsonify({"code":404,"msg":"文件不存在"}), 404
     return jsonify({"code":200,"msg":"文件记录已删除"})
+
+
+@app.route("/api/user/files/<file_hash>/shares", methods=["POST"])
+@require_user
+def user_file_share_create(file_hash):
+    if not validate_file_hash(file_hash):
+        return jsonify({"code":400,"msg":"file_hash 格式无效"}), 400
+    owner_user_id = g.current_user.get("user_id")
+    current_cursor().execute(
+        """
+        select file_hash,owner_user_id
+        from file_chain_record
+        where file_hash=%s and owner_user_id=%s and deleted_at is null
+        limit 1
+        """,
+        (file_hash,owner_user_id),
+    )
+    if not current_cursor().fetchone():
+        return jsonify({"code":404,"msg":"文件不存在"}), 404
+
+    data = get_json_body()
+    visibility = normalize_visibility(data.get("visibility", "public"))
+    status = normalize_share_status(data.get("status", "active"))
+    if status is None:
+        return jsonify({"code":400,"msg":"status 格式无效"}), 400
+    expires_at, expiry_error = parse_share_expires_at(data.get("expires_at"))
+    if expiry_error:
+        return jsonify({"code":400,"msg":expiry_error}), 400
+    max_downloads, max_error = parse_non_negative_int(data.get("max_downloads", 0), "max_downloads")
+    if max_error:
+        return jsonify({"code":400,"msg":max_error}), 400
+    extract_code = str(data.get("extract_code") or "").strip()
+    extract_code_hash = shares.hash_extract_code(extract_code) if extract_code else ""
+    share_code = shares.create_share_code()
+
+    current_cursor().execute(
+        """
+        insert into file_share(share_code,file_hash,owner_user_id,visibility,extract_code_hash,expires_at,max_downloads,status)
+        values(%s,%s,%s,%s,%s,%s,%s,%s)
+        """,
+        (
+            share_code,
+            file_hash,
+            owner_user_id,
+            visibility,
+            extract_code_hash,
+            expires_at,
+            max_downloads,
+            status,
+        ),
+    )
+    commit_database()
+    return jsonify({
+        "code":200,
+        "msg":"分享已创建",
+        "data":{
+            "share_code":share_code,
+            "file_hash":file_hash,
+            "owner_user_id":owner_user_id,
+            "visibility":visibility,
+            "extract_code_required":bool(extract_code_hash),
+            "expires_at":str(expires_at) if expires_at else "",
+            "max_downloads":max_downloads,
+            "download_count":0,
+            "status":status,
+            "share_url":f"/api/share/{urllib.parse.quote(share_code)}",
+        },
+    })
+
+
+@app.route("/api/user/shares", methods=["GET"])
+@require_user
+def user_share_list():
+    owner_user_id = g.current_user.get("user_id")
+    current_cursor().execute(f"""
+    select {shares.SHARE_SELECT_PROJECTION}
+    from file_share s
+    join file_chain_record f on f.file_hash=s.file_hash and f.deleted_at is null
+    where s.owner_user_id=%s and s.status<>'deleted'
+    order by s.created_at desc
+    """,(owner_user_id,))
+    return jsonify({
+        "code":200,
+        "data":[shares.format_share_row(row) for row in current_cursor().fetchall()],
+    })
+
+
+@app.route("/api/user/shares/<share_code>", methods=["PATCH"])
+@require_user
+def user_share_update(share_code):
+    if not validate_share_code(share_code):
+        return jsonify({"code":404,"msg":"分享不存在"}), 404
+    owner_user_id = g.current_user.get("user_id")
+    current_cursor().execute(
+        "select share_code from file_share where share_code=%s and owner_user_id=%s and status<>'deleted'",
+        (share_code,owner_user_id),
+    )
+    if not current_cursor().fetchone():
+        return jsonify({"code":404,"msg":"分享不存在"}), 404
+
+    data = get_json_body()
+    updates = []
+    params = []
+    if "extract_code" in data:
+        extract_code = str(data.get("extract_code") or "").strip()
+        updates.append("extract_code_hash=%s")
+        params.append(shares.hash_extract_code(extract_code) if extract_code else "")
+    if "expires_at" in data:
+        expires_at, expiry_error = parse_share_expires_at(data.get("expires_at"))
+        if expiry_error:
+            return jsonify({"code":400,"msg":expiry_error}), 400
+        updates.append("expires_at=%s")
+        params.append(expires_at)
+    if "max_downloads" in data:
+        max_downloads, max_error = parse_non_negative_int(data.get("max_downloads"), "max_downloads")
+        if max_error:
+            return jsonify({"code":400,"msg":max_error}), 400
+        updates.append("max_downloads=%s")
+        params.append(max_downloads)
+    if "status" in data:
+        status = normalize_share_status(data.get("status"))
+        if status is None:
+            return jsonify({"code":400,"msg":"status 格式无效"}), 400
+        updates.append("status=%s")
+        params.append(status)
+    if "visibility" in data:
+        updates.append("visibility=%s")
+        params.append(normalize_visibility(data.get("visibility")))
+    if not updates:
+        return jsonify({"code":400,"msg":"没有可更新的分享字段"}), 400
+
+    params.extend([share_code, owner_user_id])
+    current_cursor().execute(
+        f"update file_share set {','.join(updates)} where share_code=%s and owner_user_id=%s and status<>'deleted'",
+        tuple(params),
+    )
+    commit_database()
+    return jsonify({"code":200,"msg":"分享已更新"})
+
+
+@app.route("/api/user/shares/<share_code>", methods=["DELETE"])
+@require_user
+def user_share_delete(share_code):
+    if not validate_share_code(share_code):
+        return jsonify({"code":404,"msg":"分享不存在"}), 404
+    owner_user_id = g.current_user.get("user_id")
+    active_cursor = current_cursor()
+    active_cursor.execute(
+        "update file_share set status=%s where share_code=%s and owner_user_id=%s and status<>'deleted'",
+        ("deleted",share_code,owner_user_id),
+    )
+    commit_database()
+    if getattr(active_cursor, "rowcount", None) == 0:
+        return jsonify({"code":404,"msg":"分享不存在"}), 404
+    return jsonify({"code":200,"msg":"分享已删除"})
+
+
+@app.route("/api/share/<share_code>", methods=["GET"])
+def public_share_detail(share_code):
+    if not validate_share_code(share_code):
+        return jsonify({"code":404,"msg":"分享不存在"}), 404
+    row = select_share_row(share_code)
+    if not row:
+        return jsonify({"code":404,"msg":"分享不存在"}), 404
+    share = shares.format_share_row(row, include_extract_code_hash=True)
+    allowed, status_code, message = shares.validate_share_access(share)
+    if not allowed:
+        return jsonify({"code":status_code,"msg":message}), status_code
+    share.pop("extract_code_hash", None)
+    return jsonify({"code":200,"data":share})
+
+
+@app.route("/api/share/<share_code>/verify", methods=["POST"])
+def public_share_verify(share_code):
+    if not validate_share_code(share_code):
+        return jsonify({"code":404,"msg":"分享不存在"}), 404
+    row = select_share_row(share_code)
+    if not row:
+        return jsonify({"code":404,"msg":"分享不存在"}), 404
+    share = shares.format_share_row(row, include_extract_code_hash=True)
+    allowed, status_code, message = shares.validate_share_access(share)
+    if not allowed:
+        return jsonify({"code":status_code,"msg":message}), status_code
+    code_hash = share.get("extract_code_hash") or ""
+    if code_hash and not shares.verify_extract_code(get_json_body().get("extract_code", ""), code_hash):
+        return jsonify({"code":403,"msg":"提取码错误","verified":False}), 403
+    return jsonify({"code":200,"verified":True})
 
 
 # 查询所有上链存证记录

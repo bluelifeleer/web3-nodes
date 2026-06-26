@@ -124,6 +124,41 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertIsNone(auth.verify_session_token(tampered, "test-secret"))
         self.assertIsNone(auth.verify_session_token(expired, "test-secret"))
 
+    def test_extract_code_hash_accepts_correct_code_and_rejects_wrong_code(self):
+        shares = importlib.import_module("shares")
+
+        code_hash = shares.hash_extract_code("A1b2")
+
+        self.assertNotIn("A1b2", code_hash)
+        self.assertTrue(shares.verify_extract_code("A1b2", code_hash))
+        self.assertFalse(shares.verify_extract_code("wrong", code_hash))
+
+    def test_validate_share_access_rejects_expired_active_share(self):
+        shares = importlib.import_module("shares")
+        expired_share = {
+            "status": "active",
+            "expires_at": "2000-01-01T00:00:00",
+            "max_downloads": 0,
+            "download_count": 0,
+        }
+
+        result = shares.validate_share_access(expired_share)
+
+        self.assertEqual(result, (False, 410, "分享已过期"))
+
+    def test_validate_share_access_rejects_exhausted_active_share(self):
+        shares = importlib.import_module("shares")
+        exhausted_share = {
+            "status": "active",
+            "expires_at": None,
+            "max_downloads": 3,
+            "download_count": 3,
+        }
+
+        result = shares.validate_share_access(exhausted_share)
+
+        self.assertEqual(result, (False, 429, "下载次数已用完"))
+
     def test_wallet_login_message_contains_nonce_and_purpose(self):
         auth = importlib.import_module("auth")
 
@@ -1639,6 +1674,263 @@ class MysqlConfigTest(unittest.TestCase):
             sql for sql, _ in fake_cursor.executed if "from file_chain_record" in sql
         ]
         self.assertEqual(file_queries, [])
+
+    def test_create_share_requires_owned_file_and_hashes_extract_code(self):
+        auth = importlib.import_module("auth")
+        server_main = load_server_main(SESSION_SECRET="session-secret")
+        token = auth.create_session_token({"user_id": 7, "username": "alice"}, "session-secret")
+        file_hash = "a" * 64
+
+        class FakeCursor:
+            def __init__(self):
+                self.executed = []
+                self.last_sql = ""
+
+            def execute(self, sql, params=None):
+                self.last_sql = sql
+                self.executed.append((sql, params))
+
+            def fetchone(self):
+                if "from app_user" in self.last_sql:
+                    return (7, "alice", "hash", "0xabc", "active")
+                if "from file_chain_record" in self.last_sql:
+                    return (file_hash, 7)
+                return None
+
+            def fetchall(self):
+                return []
+
+        fake_cursor = FakeCursor()
+        server_main.cursor = fake_cursor
+        server_main.db = types.SimpleNamespace(commit=lambda: None)
+        server_main.init_db = lambda: True
+
+        response = server_main.app.test_client().post(
+            f"/api/user/files/{file_hash}/shares",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"extract_code": "ABCD", "max_downloads": 2},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()["data"]
+        self.assertEqual(data["file_hash"], file_hash)
+        self.assertTrue(data["extract_code_required"])
+        self.assertNotIn("extract_code_hash", data)
+        insert_params = [
+            params for sql, params in fake_cursor.executed
+            if sql.strip().lower().startswith("insert into file_share")
+        ][0]
+        self.assertEqual(insert_params[1], file_hash)
+        self.assertEqual(insert_params[2], 7)
+        self.assertNotEqual(insert_params[4], "ABCD")
+
+    def test_user_shares_list_uses_current_owner_and_hides_extract_hash(self):
+        auth = importlib.import_module("auth")
+        server_main = load_server_main(SESSION_SECRET="session-secret")
+        now = server_main.datetime.now()
+        token = auth.create_session_token({"user_id": 7, "username": "alice"}, "session-secret")
+
+        class FakeCursor:
+            def __init__(self):
+                self.executed = []
+                self.last_sql = ""
+
+            def execute(self, sql, params=None):
+                self.last_sql = sql
+                self.executed.append((sql, params))
+
+            def fetchone(self):
+                if "from app_user" in self.last_sql:
+                    return (7, "alice", "hash", "0xabc", "active")
+                return None
+
+            def fetchall(self):
+                return [(
+                    "share123",
+                    "b" * 64,
+                    7,
+                    "public",
+                    "sha256$salt$digest",
+                    None,
+                    0,
+                    0,
+                    "active",
+                    now,
+                    "demo.txt",
+                    1.5,
+                )]
+
+        fake_cursor = FakeCursor()
+        server_main.cursor = fake_cursor
+        server_main.init_db = lambda: True
+
+        response = server_main.app.test_client().get(
+            "/api/user/shares",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        share = response.get_json()["data"][0]
+        self.assertTrue(share["extract_code_required"])
+        self.assertNotIn("extract_code_hash", share)
+        share_queries = [
+            (sql, params) for sql, params in fake_cursor.executed if "from file_share" in sql
+        ]
+        self.assertEqual(share_queries[-1][1], (7,))
+
+    def test_update_and_delete_share_are_owner_only(self):
+        auth = importlib.import_module("auth")
+        server_main = load_server_main(SESSION_SECRET="session-secret")
+        token = auth.create_session_token({"user_id": 7, "username": "alice"}, "session-secret")
+
+        class FakeCursor:
+            def __init__(self):
+                self.executed = []
+                self.last_sql = ""
+                self.rowcount = 1
+
+            def execute(self, sql, params=None):
+                self.last_sql = sql
+                self.executed.append((sql, params))
+
+            def fetchone(self):
+                if "from app_user" in self.last_sql:
+                    return (7, "alice", "hash", "0xabc", "active")
+                if "from file_share" in self.last_sql:
+                    return ("share123",)
+                return None
+
+        fake_cursor = FakeCursor()
+        server_main.cursor = fake_cursor
+        server_main.db = types.SimpleNamespace(commit=lambda: None)
+        server_main.init_db = lambda: True
+        client = server_main.app.test_client()
+
+        patch_response = client.patch(
+            "/api/user/shares/share123",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"extract_code": "WXYZ", "status": "inactive", "max_downloads": 5},
+        )
+        delete_response = client.delete(
+            "/api/user/shares/share123",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        self.assertEqual(patch_response.status_code, 200)
+        self.assertEqual(delete_response.status_code, 200)
+        update_queries = [
+            (sql, params) for sql, params in fake_cursor.executed
+            if sql.strip().lower().startswith("update file_share")
+        ]
+        self.assertEqual(len(update_queries), 2)
+        self.assertIn("owner_user_id=%s", update_queries[0][0])
+        self.assertIn("owner_user_id=%s", update_queries[1][0])
+
+    def test_public_share_missing_returns_json_404(self):
+        server_main = load_server_main()
+
+        class FakeCursor:
+            def __init__(self):
+                self.last_sql = ""
+
+            def execute(self, sql, params=None):
+                self.last_sql = sql
+
+            def fetchone(self):
+                return None
+
+        server_main.cursor = FakeCursor()
+        server_main.init_db = lambda: True
+
+        response = server_main.app.test_client().get("/api/share/missing")
+
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.content_type, "application/json")
+        self.assertEqual(response.get_json()["msg"], "分享不存在")
+
+    def test_public_share_metadata_validates_access_and_hides_extract_hash(self):
+        shares = importlib.import_module("shares")
+        server_main = load_server_main()
+        now = server_main.datetime.now()
+        share_hash = shares.hash_extract_code("ABCD", salt="fixedsalt")
+
+        class FakeCursor:
+            def __init__(self):
+                self.last_sql = ""
+
+            def execute(self, sql, params=None):
+                self.last_sql = sql
+
+            def fetchone(self):
+                if "from file_share" in self.last_sql:
+                    return (
+                        "share123",
+                        "c" * 64,
+                        7,
+                        "public",
+                        share_hash,
+                        None,
+                        0,
+                        0,
+                        "active",
+                        now,
+                        "demo.txt",
+                        1.5,
+                    )
+                return None
+
+        server_main.cursor = FakeCursor()
+        server_main.init_db = lambda: True
+
+        response = server_main.app.test_client().get("/api/share/share123")
+
+        self.assertEqual(response.status_code, 200)
+        share = response.get_json()["data"]
+        self.assertTrue(share["extract_code_required"])
+        self.assertNotIn("extract_code_hash", share)
+        self.assertEqual(share["file_name"], "demo.txt")
+
+    def test_public_share_verify_checks_extract_code(self):
+        shares = importlib.import_module("shares")
+        server_main = load_server_main()
+        now = server_main.datetime.now()
+        share_hash = shares.hash_extract_code("ABCD", salt="fixedsalt")
+
+        class FakeCursor:
+            def __init__(self):
+                self.last_sql = ""
+
+            def execute(self, sql, params=None):
+                self.last_sql = sql
+
+            def fetchone(self):
+                if "from file_share" in self.last_sql:
+                    return (
+                        "share123",
+                        "d" * 64,
+                        7,
+                        "public",
+                        share_hash,
+                        None,
+                        0,
+                        0,
+                        "active",
+                        now,
+                        "demo.txt",
+                        1.5,
+                    )
+                return None
+
+        server_main.cursor = FakeCursor()
+        server_main.init_db = lambda: True
+        client = server_main.app.test_client()
+
+        wrong_response = client.post("/api/share/share123/verify", json={"extract_code": "BAD"})
+        correct_response = client.post("/api/share/share123/verify", json={"extract_code": "ABCD"})
+
+        self.assertEqual(wrong_response.status_code, 403)
+        self.assertEqual(correct_response.status_code, 200)
+        self.assertTrue(correct_response.get_json()["verified"])
 
     def test_filter_file_records_searches_and_paginates(self):
         server_main = load_server_main()
