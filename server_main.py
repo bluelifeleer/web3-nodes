@@ -1258,13 +1258,19 @@ def node_heartbeat():
     node_mac = data.get("node_mac")
     disk_used = data.get("disk_used",0)
     upload_bw = data.get("upload_bw",0)
+    storage_path = str(data.get("storage_path") or "")[:255]
+    storage_status = str(data.get("storage_status") or "unknown")[:32]
+    storage_error = str(data.get("storage_error") or "")[:255]
+    storage_total_gb = float(data.get("storage_total_gb") or 0)
+    storage_used_gb = float(data.get("storage_used_gb") or disk_used or 0)
+    storage_free_gb = float(data.get("storage_free_gb") or 0)
 
     # 输入心跳数据
     print(f"{user_addr} {node_mac} {disk_used} {upload_bw}")
 
     current_cursor().execute(
-        "update node_power set disk_used=%s,upload_bandwidth=%s,online_duration=online_duration+1,update_time=%s where user_address=%s and node_mac=%s",
-        (disk_used,upload_bw,datetime.now(),user_addr,node_mac)
+        "update node_power set disk_used=%s,upload_bandwidth=%s,storage_path=%s,storage_status=%s,storage_error=%s,storage_total_gb=%s,storage_used_gb=%s,storage_free_gb=%s,online_duration=online_duration+1,update_time=%s where user_address=%s and node_mac=%s",
+        (disk_used,upload_bw,storage_path,storage_status,storage_error,storage_total_gb,storage_used_gb,storage_free_gb,datetime.now(),user_addr,node_mac)
     )
     return jsonify({"code":200,"msg":"心跳上报成功"})
 

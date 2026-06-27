@@ -15,6 +15,12 @@ CREATE TABLE IF NOT EXISTS node_power (
   node_mac varchar(64) NOT NULL,
   disk_total double precision DEFAULT 0,
   disk_used double precision DEFAULT 0,
+  storage_path varchar(255) DEFAULT '',
+  storage_status varchar(32) DEFAULT 'unknown',
+  storage_error varchar(255) DEFAULT '',
+  storage_total_gb double precision DEFAULT 0,
+  storage_used_gb double precision DEFAULT 0,
+  storage_free_gb double precision DEFAULT 0,
   online_duration integer DEFAULT 0,
   upload_bandwidth double precision DEFAULT 0,
   update_time timestamp DEFAULT CURRENT_TIMESTAMP

@@ -1007,6 +1007,56 @@ class MysqlConfigTest(unittest.TestCase):
                 self.assertIn(f"KEY `{index_name}` (`{column_name}`)", sql)
             self.assertIn(f"CREATE INDEX {index_name}", migrations)
 
+    def test_node_power_capacity_fields_exist_in_init_sql_and_migrations(self):
+        mysql_sql = Path("init_mysql.sql").read_text(encoding="utf-8")
+        postgres_sql = Path("init_postgresql.sql").read_text(encoding="utf-8")
+        mysql_server = load_server_main(DB_ENGINE="mysql")
+        postgres_server = load_server_main(DB_ENGINE="postgresql")
+        mysql_migrations = "\n".join(mysql_server.database_module.SCHEMA_MIGRATIONS)
+        postgres_migrations = "\n".join(postgres_server.database_module.POSTGRES_SCHEMA_MIGRATIONS)
+
+        for column in ("storage_path", "storage_status", "storage_error", "storage_total_gb", "storage_used_gb", "storage_free_gb"):
+            self.assertIn(column, mysql_sql)
+            self.assertIn(column, postgres_sql)
+            self.assertIn(column, mysql_migrations)
+            self.assertIn(column, postgres_migrations)
+
+    def test_heartbeat_stores_capacity_fields_and_allows_old_payloads(self):
+        server_main = load_server_main()
+        executed = []
+
+        class FakeCursor:
+            def execute(self, sql, params=None):
+                executed.append((sql, params))
+
+        server_main.cursor = FakeCursor()
+        server_main.init_db = lambda: True
+        client = server_main.app.test_client()
+
+        old_response = client.post("/heartbeat", json={
+            "user_addr": "NODE_A",
+            "node_mac": "MAC_A",
+            "disk_used": 2.5,
+            "upload_bw": 1.2,
+        })
+        new_response = client.post("/heartbeat", json={
+            "user_addr": "NODE_A",
+            "node_mac": "MAC_A",
+            "disk_used": 3.5,
+            "upload_bw": 1.5,
+            "storage_path": "D:/web3-node-data",
+            "storage_status": "ok",
+            "storage_error": "",
+            "storage_total_gb": 512,
+            "storage_used_gb": 128,
+            "storage_free_gb": 384,
+        })
+
+        self.assertEqual(old_response.status_code, 200)
+        self.assertEqual(new_response.status_code, 200)
+        self.assertTrue(any("storage_total_gb" in sql for sql, _ in executed))
+        self.assertIn("D:/web3-node-data", executed[-1][1])
+
     def test_sql_dialect_helpers_switch_by_engine(self):
         mysql_server = load_server_main(DB_ENGINE="mysql")
         postgres_server = load_server_main(DB_ENGINE="postgresql")
