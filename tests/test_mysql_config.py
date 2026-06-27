@@ -837,6 +837,59 @@ class MysqlConfigTest(unittest.TestCase):
             for key in ("MYSQL_HOST", "MYSQL_USER", "MYSQL_PASSWORD", "ADMIN_API_TOKEN"):
                 os.environ.pop(key, None)
 
+    def test_runtime_secret_bootstrap_generates_missing_values(self):
+        server_main = load_server_main()
+        env_path = Path("tests/.env.generated")
+        env_path.unlink(missing_ok=True)
+        environ = {}
+        printed = []
+        try:
+            generated = server_main.ensure_runtime_secrets(
+                env_path=env_path,
+                environ=environ,
+                print_func=printed.append,
+            )
+
+            self.assertEqual(set(generated), {"ADMIN_API_TOKEN", "SESSION_SECRET", "AES_KEY"})
+            self.assertEqual(environ["ADMIN_API_TOKEN"], generated["ADMIN_API_TOKEN"])
+            self.assertEqual(environ["SESSION_SECRET"], generated["SESSION_SECRET"])
+            self.assertEqual(environ["AES_KEY"], generated["AES_KEY"])
+            self.assertEqual(len(generated["AES_KEY"]), 16)
+            text = env_path.read_text(encoding="utf-8")
+            self.assertIn("ADMIN_API_TOKEN=", text)
+            self.assertIn("SESSION_SECRET=", text)
+            self.assertIn("AES_KEY=", text)
+            self.assertTrue(any("/admin/login" in line for line in printed))
+        finally:
+            env_path.unlink(missing_ok=True)
+
+    def test_runtime_secret_bootstrap_preserves_existing_values(self):
+        server_main = load_server_main()
+        env_path = Path("tests/.env.existing")
+        env_path.write_text(
+            "\n".join([
+                "ADMIN_API_TOKEN=existing-admin",
+                "SESSION_SECRET=existing-session",
+                "AES_KEY=existing-aes-key",
+            ]),
+            encoding="utf-8",
+        )
+        environ = {}
+        try:
+            generated = server_main.ensure_runtime_secrets(
+                env_path=env_path,
+                environ=environ,
+                print_func=lambda message: None,
+            )
+
+            self.assertEqual(generated, {})
+            self.assertEqual(environ["ADMIN_API_TOKEN"], "existing-admin")
+            self.assertEqual(environ["SESSION_SECRET"], "existing-session")
+            self.assertEqual(environ["AES_KEY"], "existing-aes-key")
+            self.assertEqual(env_path.read_text(encoding="utf-8").count("ADMIN_API_TOKEN="), 1)
+        finally:
+            env_path.unlink(missing_ok=True)
+
     def test_init_mysql_sql_contains_database_and_required_tables(self):
         sql = Path("init_mysql.sql").read_text(encoding="utf-8")
 
@@ -1101,6 +1154,78 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertIn('id="adminTokenInput"', server_main.ADMIN_HTML)
         self.assertIn("saveAdminToken", server_main.ADMIN_HTML)
 
+    def test_admin_login_page_renders_token_login_form_without_database(self):
+        server_main = load_server_main(ADMIN_API_TOKEN="secret-token")
+        server_main.init_db = lambda: self.fail("admin login page should not require database")
+
+        response = server_main.app.test_client().get("/admin/login")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("后台登录", body)
+        self.assertIn("/api/admin/login", body)
+        self.assertIn("admin_token", body)
+
+    def test_public_homepage_links_business_user_admin_and_node_flows(self):
+        server_main = load_server_main(ADMIN_API_TOKEN="secret-token")
+        server_main.init_db = lambda: self.fail("public homepage should not require database")
+
+        response = server_main.app.test_client().get("/")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("Web3 节点激励与文件分享系统", body)
+        self.assertIn("企业级分布式存储", body)
+        for path in (
+            "/user/login",
+            "/user/upload",
+            "/user/dashboard",
+            "/admin/login",
+            "/admin",
+            "/api/health",
+        ):
+            self.assertIn(path, body)
+        self.assertNotIn('id="nodeTable"', body)
+
+    def test_admin_dashboard_is_available_at_admin_without_database(self):
+        server_main = load_server_main(ADMIN_API_TOKEN="secret-token")
+        server_main.init_db = lambda: self.fail("admin dashboard shell should not require database")
+
+        response = server_main.app.test_client().get("/admin")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn('id="nodeTable"', body)
+        self.assertIn("/admin/login", body)
+
+    def test_admin_login_api_validates_token_without_admin_header(self):
+        server_main = load_server_main(ADMIN_API_TOKEN="secret-token")
+        server_main.init_db = lambda: self.fail("admin login api should not require database")
+        client = server_main.app.test_client()
+
+        bad_response = client.post("/api/admin/login", json={"token": "bad-token"})
+        ok_response = client.post("/api/admin/login", json={"token": "secret-token"})
+
+        self.assertEqual(bad_response.status_code, 401)
+        self.assertEqual(ok_response.status_code, 200)
+        self.assertTrue(ok_response.get_json()["authenticated"])
+
+    def test_admin_page_guides_missing_token_to_login_page(self):
+        server_main = load_server_main(ADMIN_API_TOKEN="secret-token")
+
+        self.assertIn("/admin/login", server_main.ADMIN_HTML)
+        self.assertIn('window.location.href = "/admin"', server_main.ADMIN_LOGIN_HTML)
+        self.assertIn("requireAdminLogin", server_main.ADMIN_HTML)
+
+    def test_admin_page_auto_refreshes_dashboard_data(self):
+        server_main = load_server_main(ADMIN_API_TOKEN="secret-token")
+
+        self.assertIn("ADMIN_REFRESH_INTERVAL_MS", server_main.ADMIN_HTML)
+        self.assertIn("startAdminAutoRefresh", server_main.ADMIN_HTML)
+        self.assertIn('id="adminAutoRefreshStatus"', server_main.ADMIN_HTML)
+        self.assertIn("setInterval(refreshAdminData", server_main.ADMIN_HTML)
+        self.assertIn("getIpfsStatus();", server_main.ADMIN_HTML)
+
     def test_select_node_rows_uses_request_cursor_not_mutable_global_cursor(self):
         server_main = load_server_main(ADMIN_API_TOKEN="secret-token")
 
@@ -1277,7 +1402,7 @@ class MysqlConfigTest(unittest.TestCase):
         old_webview = sys.modules.get("webview")
         config_path = Path("tests/node_config.json")
         config_path.write_text(
-            '{"server_url":"http://example.com:9000","parent_invite":"INV1","heartbeat_interval":5}',
+            '{"server_url":"http://example.com:9000","parent_invite":"INV1","heartbeat_interval":5,"reconnect_interval":2}',
             encoding="utf-8",
         )
         try:
@@ -1290,8 +1415,53 @@ class MysqlConfigTest(unittest.TestCase):
             self.assertEqual(config["server_url"], "http://example.com:9000")
             self.assertEqual(config["parent_invite"], "INV1")
             self.assertEqual(config["heartbeat_interval"], 5)
+            self.assertEqual(config["reconnect_interval"], 2)
         finally:
             config_path.unlink(missing_ok=True)
+            sys.modules.pop("client", None)
+            if old_requests is None:
+                sys.modules.pop("requests", None)
+            else:
+                sys.modules["requests"] = old_requests
+            if old_webview is None:
+                sys.modules.pop("webview", None)
+            else:
+                sys.modules["webview"] = old_webview
+
+    def test_client_registration_retries_until_service_recovers(self):
+        old_requests = sys.modules.get("requests")
+        old_webview = sys.modules.get("webview")
+        calls = []
+        sleeps = []
+
+        def fake_post(url, json=None, timeout=10):
+            calls.append((url, json, timeout))
+            if len(calls) == 1:
+                raise RuntimeError("service down")
+            return types.SimpleNamespace(status_code=200)
+
+        try:
+            sys.modules["requests"] = types.SimpleNamespace(post=fake_post)
+            sys.modules["webview"] = None
+            sys.modules.pop("client", None)
+            client_module = importlib.import_module("client")
+
+            registered = client_module.wait_for_registration(
+                "http://server",
+                "NODE_A",
+                "MAC_A",
+                "INV1",
+                reconnect_interval=3,
+                post_func=fake_post,
+                sleep_func=lambda seconds: sleeps.append(seconds),
+                max_attempts=2,
+            )
+
+            self.assertTrue(registered)
+            self.assertEqual(len(calls), 2)
+            self.assertEqual(sleeps, [3])
+            self.assertEqual(calls[1][1]["parent_invite"], "INV1")
+        finally:
             sys.modules.pop("client", None)
             if old_requests is None:
                 sys.modules.pop("requests", None)

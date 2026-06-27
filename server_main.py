@@ -44,6 +44,68 @@ from db import (
 # ==================== 初始化Flask服务 ====================
 app = Flask(__name__)
 
+RUNTIME_SECRET_KEYS = ("ADMIN_API_TOKEN", "SESSION_SECRET", "AES_KEY")
+
+
+def parse_env_file_values(env_path):
+    path = Path(env_path)
+    values = {}
+    if not path.exists():
+        return values
+    for line in path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, value = stripped.split("=", 1)
+        values[key.strip()] = value.strip().strip('"').strip("'")
+    return values
+
+
+def generate_runtime_secret(key):
+    if key == "AES_KEY":
+        return secrets.token_hex(8)
+    if key == "SESSION_SECRET":
+        return secrets.token_urlsafe(48)
+    return secrets.token_urlsafe(32)
+
+
+def ensure_runtime_secrets(env_path=None, environ=None, print_func=print):
+    path = Path(env_path) if env_path else BASE_DIR / ".env"
+    target_environ = environ if environ is not None else os.environ
+    env_values = parse_env_file_values(path)
+    generated = {}
+    for key in RUNTIME_SECRET_KEYS:
+        existing = target_environ.get(key) or env_values.get(key)
+        if existing:
+            target_environ[key] = existing
+            continue
+        value = generate_runtime_secret(key)
+        target_environ[key] = value
+        generated[key] = value
+
+    if generated:
+        if path.exists():
+            existing_text = path.read_text(encoding="utf-8")
+            prefix = "" if existing_text.endswith(("\n", "\r\n")) or not existing_text else "\n"
+        else:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            prefix = ""
+        with path.open("a", encoding="utf-8") as handle:
+            if prefix:
+                handle.write(prefix)
+            handle.write("# Auto-generated runtime secrets\n")
+            for key, value in generated.items():
+                handle.write(f"{key}={value}\n")
+        print_func("已自动生成运行密钥，并写入 .env：")
+        for key, value in generated.items():
+            print_func(f"{key}={value}")
+        print_func("后台登录地址：http://127.0.0.1:8000/admin/login")
+    return generated
+
+
+if os.getenv("WEB3_NODES_SKIP_DOTENV") != "1":
+    ensure_runtime_secrets()
+
 ADMIN_API_TOKEN = os.getenv("ADMIN_API_TOKEN", "")
 SESSION_SECRET = os.getenv("SESSION_SECRET")
 MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_MB", "100")) * 1024 * 1024
@@ -171,8 +233,18 @@ ADMIN_PROTECTED_PATHS = {
     "/api/upload_file",
 }
 
+ADMIN_PUBLIC_PATHS = {
+    "/",
+    "/admin",
+    "/admin/login",
+    "/api/admin/login",
+    "/api/health",
+}
+
 
 def is_admin_protected_path(path):
+    if path in ADMIN_PUBLIC_PATHS:
+        return False
     return path in ADMIN_PROTECTED_PATHS or path.startswith("/api/admin/")
 
 
@@ -181,6 +253,10 @@ def admin_token_is_valid():
         return False
     supplied = request.headers.get("X-Admin-Token") or request.args.get("admin_token", "")
     return secrets.compare_digest(supplied, ADMIN_API_TOKEN)
+
+
+def admin_token_value_is_valid(token):
+    return bool(ADMIN_API_TOKEN) and secrets.compare_digest(token or "", ADMIN_API_TOKEN)
 
 
 def get_bearer_token():
@@ -222,7 +298,7 @@ def require_user(view):
 
 @app.before_request
 def require_database_for_api():
-    if request.path == "/" or request.path == "/api/health":
+    if request.path in ADMIN_PUBLIC_PATHS:
         return None
     if is_admin_protected_path(request.path) and not admin_token_is_valid():
         return jsonify({"code":401,"msg":"缺少或无效的后台访问 Token"}), 401
@@ -1187,7 +1263,192 @@ def leaderboard():
 def invite_tree():
     return jsonify({"code":200,"data":build_invite_tree(select_node_rows())})
 
-# ==================== 极简前端后台面板 ====================
+# ==================== 极简前端页面 ====================
+HOME_HTML = '''
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Web3 节点激励与文件分享系统</title>
+    <style>
+        *{box-sizing:border-box;}
+        body{margin:0;font-family:Arial,"Microsoft YaHei",sans-serif;background:#f6f8fb;color:#172033;}
+        a{text-decoration:none;color:inherit;}
+        .hero{min-height:88vh;display:grid;align-items:center;background:
+            linear-gradient(120deg,rgba(8,28,61,.92),rgba(13,79,92,.86)),
+            url("https://images.unsplash.com/photo-1558494949-ef010cbdcc31?auto=format&fit=crop&w=1800&q=80") center/cover;color:white;}
+        .wrap{width:min(1180px,calc(100vw - 32px));margin:0 auto;}
+        nav{display:flex;justify-content:space-between;align-items:center;padding:26px 0;gap:18px;}
+        .brand{font-weight:800;font-size:20px;letter-spacing:.2px;}
+        .navlinks{display:flex;gap:12px;flex-wrap:wrap;}
+        .navlinks a,.btn{display:inline-flex;align-items:center;justify-content:center;min-height:40px;padding:0 16px;border-radius:7px;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.2);}
+        .hero-grid{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(320px,.9fr);gap:42px;align-items:center;padding:58px 0 74px;}
+        h1{font-size:56px;line-height:1.05;margin:0 0 22px;letter-spacing:0;}
+        .lead{font-size:18px;line-height:1.8;color:#d9eef2;max-width:680px;}
+        .actions{display:flex;gap:14px;flex-wrap:wrap;margin-top:30px;}
+        .primary{background:#30d5a0;color:#06251f;border-color:#30d5a0;font-weight:700;}
+        .secondary{background:rgba(255,255,255,.1);color:white;}
+        .console{background:rgba(7,16,31,.72);border:1px solid rgba(255,255,255,.16);border-radius:8px;padding:22px;box-shadow:0 20px 60px rgba(0,0,0,.25);}
+        .console h2{font-size:18px;margin:0 0 16px;}
+        .metric{display:grid;grid-template-columns:1fr auto;gap:8px;padding:13px 0;border-bottom:1px solid rgba(255,255,255,.12);}
+        .metric:last-child{border-bottom:0;}
+        .metric span{color:#9cc7d0;}
+        .metric strong{font-size:18px;}
+        section{padding:64px 0;}
+        .section-head{display:flex;justify-content:space-between;gap:24px;align-items:end;margin-bottom:22px;}
+        .section-head h2{font-size:32px;margin:0;}
+        .section-head p{margin:0;color:#64748b;max-width:560px;line-height:1.7;}
+        .cards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;}
+        .card{background:white;border:1px solid #e5e7eb;border-radius:8px;padding:22px;min-height:190px;box-shadow:0 10px 24px rgba(15,23,42,.05);}
+        .card h3{margin:0 0 10px;font-size:20px;}
+        .card p{color:#5b677a;line-height:1.7;margin:0 0 18px;}
+        .card a{color:#0f766e;font-weight:700;}
+        .flow{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;}
+        .step{background:#0f172a;color:white;border-radius:8px;padding:18px;min-height:150px;}
+        .step b{display:block;color:#5eead4;margin-bottom:12px;}
+        footer{padding:28px 0;color:#64748b;border-top:1px solid #e5e7eb;}
+        @media (max-width:900px){
+            .hero-grid,.cards,.flow{grid-template-columns:1fr;}
+            h1{font-size:40px;}
+            nav{align-items:flex-start;flex-direction:column;}
+        }
+    </style>
+</head>
+<body>
+    <div class="hero">
+        <div class="wrap">
+            <nav>
+                <div class="brand">Web3 Nodes Store</div>
+                <div class="navlinks">
+                    <a href="/user/login">用户登录</a>
+                    <a href="/user/upload">上传文件</a>
+                    <a href="/admin/login">后台登录</a>
+                </div>
+            </nav>
+            <div class="hero-grid">
+                <main>
+                    <h1>Web3 节点激励与文件分享系统</h1>
+                    <p class="lead">面向节点运营、私有文件分发和收益结算的企业级分布式存储一体化平台。用户上传文件生成可控分享链接，节点贡献存储与带宽获得积分，后台实时查看网络、收益和提现审核。</p>
+                    <div class="actions">
+                        <a class="btn primary" href="/user/login">开始使用</a>
+                        <a class="btn secondary" href="/user/upload">上传并创建分享</a>
+                        <a class="btn secondary" href="/admin">进入服务端后台</a>
+                    </div>
+                </main>
+                <aside class="console">
+                    <h2>商业化能力概览</h2>
+                    <div class="metric"><span>文件分享</span><strong>提取码 / 过期 / 限次</strong></div>
+                    <div class="metric"><span>节点激励</span><strong>存储 + 下载积分</strong></div>
+                    <div class="metric"><span>收益闭环</span><strong>积分 / 余额 / 提现</strong></div>
+                    <div class="metric"><span>后台运营</span><strong>自动刷新监控</strong></div>
+                </aside>
+            </div>
+        </div>
+    </div>
+
+    <section>
+        <div class="wrap">
+            <div class="section-head">
+                <h2>业务入口</h2>
+                <p>把分散页面收进一个首页，用户、节点和管理员都能从这里进入自己的工作流。</p>
+            </div>
+            <div class="cards">
+                <article class="card">
+                    <h3>用户产品</h3>
+                    <p>注册登录、钱包绑定、上传文件、创建分享链接，并查看积分收益和提现记录。</p>
+                    <a href="/user/login">登录注册</a> · <a href="/user/dashboard">用户面板</a> · <a href="/user/upload">上传文件</a>
+                </article>
+                <article class="card">
+                    <h3>服务端运营</h3>
+                    <p>管理节点、文件、分享、下载、积分流水与提现审核，后台数据自动刷新。</p>
+                    <a href="/admin/login">后台登录</a> · <a href="/admin">后台面板</a>
+                </article>
+                <article class="card">
+                    <h3>节点接入</h3>
+                    <p>客户端节点自动注册、心跳上报和断线重连，适合批量扩展存储网络。</p>
+                    <a href="/api/health">服务健康检查</a>
+                </article>
+            </div>
+        </div>
+    </section>
+
+    <section>
+        <div class="wrap">
+            <div class="section-head">
+                <h2>从上传到收益</h2>
+                <p>围绕文件分发做闭环，后续可以继续扩展套餐、容量计费、节点等级和企业工作台。</p>
+            </div>
+            <div class="flow">
+                <div class="step"><b>01</b>用户登录后上传文件，系统加密并写入 IPFS。</div>
+                <div class="step"><b>02</b>创建 `/s/&lt;share_code&gt;` 分享链接，设置提取码、过期和下载次数。</div>
+                <div class="step"><b>03</b>下载成功后记录日志，给分享者和存储节点写入积分流水。</div>
+                <div class="step"><b>04</b>用户在面板查看收益并提交提现，管理员在后台审核。</div>
+            </div>
+        </div>
+    </section>
+
+    <footer>
+        <div class="wrap">本地服务入口：<a href="/">首页</a> / <a href="/admin">后台</a> / <a href="/user/dashboard">用户面板</a> / <a href="/api/health">健康检查</a></div>
+    </footer>
+</body>
+</html>
+'''
+
+ADMIN_LOGIN_HTML = '''
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>后台登录</title>
+    <style>
+        *{box-sizing:border-box;}
+        body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#f5f7fa;font-family:Arial,"Microsoft YaHei",sans-serif;color:#1f2937;}
+        main{width:min(420px,calc(100vw - 32px));background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:28px;box-shadow:0 10px 30px rgba(15,23,42,.08);}
+        h1{font-size:24px;margin:0 0 18px;}
+        label{display:block;margin-bottom:8px;font-weight:600;}
+        input{width:100%;padding:12px;border:1px solid #cbd5e1;border-radius:6px;font-size:15px;}
+        button{width:100%;margin-top:16px;padding:12px;border:0;border-radius:6px;background:#2563eb;color:white;font-size:15px;cursor:pointer;}
+        .status{min-height:22px;margin-top:12px;color:#b45309;font-size:14px;white-space:pre-wrap;}
+    </style>
+</head>
+<body>
+    <main>
+        <h1>后台登录</h1>
+        <form id="adminLoginForm">
+            <label for="adminTokenInput">后台 Token</label>
+            <input type="password" id="adminTokenInput" autocomplete="current-password" placeholder="请输入 ADMIN_API_TOKEN" required>
+            <button type="submit">登录后台</button>
+        </form>
+        <div id="loginStatus" class="status"></div>
+    </main>
+    <script>
+    const form = document.getElementById("adminLoginForm");
+    const statusBox = document.getElementById("loginStatus");
+    form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const token = document.getElementById("adminTokenInput").value.trim();
+        statusBox.textContent = "正在登录...";
+        try{
+            const response = await fetch("/api/admin/login", {
+                method: "POST",
+                headers: {"Content-Type": "application/json"},
+                body: JSON.stringify({token})
+            });
+            const payload = await response.json();
+            if(!response.ok){ throw new Error(payload.msg || "登录失败"); }
+            localStorage.setItem("admin_token", token);
+            window.location.href = "/admin";
+        }catch(error){
+            localStorage.removeItem("admin_token");
+            statusBox.textContent = error.message;
+        }
+    });
+    </script>
+</body>
+</html>
+'''
+
 ADMIN_HTML = '''
 <!DOCTYPE html>
 <html lang="zh-CN">
@@ -1216,7 +1477,9 @@ ADMIN_HTML = '''
         <input type="password" id="adminTokenInput" placeholder="请输入 .env 里的 ADMIN_API_TOKEN">
         <button onclick="saveAdminToken()">保存并加载</button>
         <button onclick="clearAdminToken()" style="background:#64748b;">清除</button>
+        <a href="/admin/login">后台登录</a>
         <span id="adminTokenStatus" class="token-status"></span>
+        <span id="adminAutoRefreshStatus" class="token-status"></span>
     </div>
 
     <div class="box">
@@ -1340,8 +1603,19 @@ ADMIN_HTML = '''
     </div>
 
 <script>
+const ADMIN_REFRESH_INTERVAL_MS = 30000;
+let adminRefreshTimer = null;
+
 function getAdminToken(){
     return localStorage.getItem("admin_token") || "";
+}
+
+function requireAdminLogin(){
+    if(!getAdminToken()){
+        window.location.href = "/admin/login";
+        return false;
+    }
+    return true;
 }
 
 function setAdminTokenStatus(text, isError){
@@ -1350,6 +1624,11 @@ function setAdminTokenStatus(text, isError){
         status.innerText = text || "";
         status.style.color = isError ? "#c2410c" : "#166534";
     }
+}
+
+function setAdminAutoRefreshStatus(text){
+    const status = document.getElementById("adminAutoRefreshStatus");
+    if(status){ status.innerText = text || ""; }
 }
 
 function initAdminTokenPanel(){
@@ -1377,6 +1656,7 @@ function clearAdminToken(){
     const input = document.getElementById("adminTokenInput");
     if(input){ input.value = ""; }
     setAdminTokenStatus("Token 已清除，请重新输入", true);
+    window.location.href = "/admin/login";
 }
 
 function adminFetch(url, options){
@@ -1394,6 +1674,7 @@ function adminFetch(url, options){
         if(res.status === 401){
             localStorage.removeItem("admin_token");
             setAdminTokenStatus("Token 无效，请重新输入", true);
+            window.location.href = "/admin/login";
         }else{
             setAdminTokenStatus("Token 验证通过", false);
         }
@@ -1628,26 +1909,33 @@ function loadNodeMap(){
     })
 }
 
-// 每30秒刷新地图
-setInterval(function(){
-    if(getAdminToken()){ loadNodeMap(); }
-},30000);
-
 function refreshAdminData(){
     getNodes();
     getReward();
     getFileList();
+    getIpfsStatus();
     getLeaderboard();
     getDailyReward();
     getInviteTree();
     if(map){ loadNodeMap(); }
+    setAdminAutoRefreshStatus(`自动刷新中｜上次刷新 ${new Date().toLocaleTimeString()}`);
+}
+
+function startAdminAutoRefresh(){
+    if(adminRefreshTimer){ clearInterval(adminRefreshTimer); }
+    setAdminAutoRefreshStatus("自动刷新中");
+    adminRefreshTimer = setInterval(refreshAdminData, ADMIN_REFRESH_INTERVAL_MS);
 }
 
 // 自动加载数据
 window.onload = function(){
     initAdminTokenPanel();
+    if(!requireAdminLogin()){ return; }
     initMap();
-    if(getAdminToken()){ refreshAdminData(); }
+    if(getAdminToken()){
+        refreshAdminData();
+        startAdminAutoRefresh();
+    }
 }
 </script>
 </body>
@@ -2209,10 +2497,29 @@ PUBLIC_SHARE_HTML = '''
 </html>
 '''
 
-# 后台首页路由
 @app.route("/")
+def home_page():
+    return render_template_string(HOME_HTML)
+
+
+@app.route("/admin")
 def admin_index():
     return render_template_string(ADMIN_HTML)
+
+
+@app.route("/admin/login")
+def admin_login_page():
+    return render_template_string(ADMIN_LOGIN_HTML)
+
+
+@app.route("/api/admin/login", methods=["POST"])
+def admin_login_api():
+    if not ADMIN_API_TOKEN:
+        return jsonify({"code":503,"msg":"后台 Token 未配置"}), 503
+    token = get_json_body().get("token", "")
+    if not admin_token_value_is_valid(token):
+        return jsonify({"code":401,"msg":"后台 Token 错误","authenticated":False}), 401
+    return jsonify({"code":200,"msg":"登录成功","authenticated":True})
 
 
 @app.route("/user/upload")
@@ -3312,5 +3619,6 @@ if __name__ == "__main__":
     # 开启定时结算
     import threading
     threading.Thread(target=settle_task,daemon=True).start()
-    print("✅ 完整服务启动成功！后台地址：http://127.0.0.1:8000")
+    print("✅ 完整服务启动成功！首页地址：http://127.0.0.1:8000")
+    print("✅ 后台地址：http://127.0.0.1:8000/admin")
     app.run(host="0.0.0.0",port=8000,debug=False)

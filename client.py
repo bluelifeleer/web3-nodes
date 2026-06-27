@@ -19,6 +19,14 @@ SERVER_URL = "http://127.0.0.1:8000"
 # 上级推广码（分享链接自动填充，用户无需手动改）
 PARENT_INVITE = ""
 HEARTBEAT_INTERVAL = 60
+RECONNECT_INTERVAL = 10
+
+
+def safe_print(message):
+    try:
+        print(message)
+    except UnicodeEncodeError:
+        print(message.encode("gbk", errors="ignore").decode("gbk"))
 
 
 def load_client_config(config_path="node_config.json"):
@@ -26,6 +34,7 @@ def load_client_config(config_path="node_config.json"):
         "server_url": SERVER_URL,
         "parent_invite": PARENT_INVITE,
         "heartbeat_interval": HEARTBEAT_INTERVAL,
+        "reconnect_interval": RECONNECT_INTERVAL,
     }
     path = Path(config_path)
     if path.exists():
@@ -38,6 +47,7 @@ def load_client_config(config_path="node_config.json"):
     config["server_url"] = os.getenv("NODE_SERVER_URL", config["server_url"])
     config["parent_invite"] = os.getenv("NODE_PARENT_INVITE", config["parent_invite"])
     config["heartbeat_interval"] = int(os.getenv("NODE_HEARTBEAT_INTERVAL", config["heartbeat_interval"]))
+    config["reconnect_interval"] = int(os.getenv("NODE_RECONNECT_INTERVAL", config["reconnect_interval"]))
     return config
 
 
@@ -72,6 +82,38 @@ def get_local_disk_use():
         # 未启动IPFS时默认基础占用
         return 0.1
 
+
+def register_node(server_url, user_addr, device_mac, parent_invite, post_func=requests.post):
+    post_func(f"{server_url}/register",json={
+        "user_addr":user_addr,
+        "node_mac":device_mac,
+        "parent_invite":parent_invite
+    },timeout=10)
+
+
+def wait_for_registration(
+    server_url,
+    user_addr,
+    device_mac,
+    parent_invite,
+    reconnect_interval=RECONNECT_INTERVAL,
+    post_func=requests.post,
+    sleep_func=time.sleep,
+    max_attempts=None,
+):
+    attempts = 0
+    while True:
+        attempts += 1
+        try:
+            register_node(server_url, user_addr, device_mac, parent_invite, post_func=post_func)
+            safe_print(f"✅ 节点注册成功，设备指纹：{device_mac}")
+            return True
+        except Exception:
+            safe_print(f"❌ 服务端连接失败，{reconnect_interval}秒后自动重连...")
+            if max_attempts is not None and attempts >= max_attempts:
+                return False
+            sleep_func(reconnect_interval)
+
 # 节点核心运行逻辑
 def client_run():
     global SERVER_URL, PARENT_INVITE, HEARTBEAT_INTERVAL
@@ -79,24 +121,22 @@ def client_run():
     SERVER_URL = config["server_url"]
     PARENT_INVITE = get_invite_arg() or config["parent_invite"]
     HEARTBEAT_INTERVAL = int(config["heartbeat_interval"])
+    reconnect_interval = int(config["reconnect_interval"])
     device_mac = get_device_mac()
     # 根据设备MAC生成唯一用户标识
     user_addr = "NODE_" + hashlib.md5(device_mac.encode()).hexdigest()[:12]
 
     # 1. 首次注册绑定上级
-    try:
-        requests.post(f"{SERVER_URL}/register",json={
-            "user_addr":user_addr,
-            "node_mac":device_mac,
-            "parent_invite":PARENT_INVITE
-        },timeout=10)
-        print(f"✅ 节点注册成功，设备指纹：{device_mac}")
-    except:
-        print("❌ 服务端连接失败，请检查服务是否启动")
-        return
+    wait_for_registration(
+        SERVER_URL,
+        user_addr,
+        device_mac,
+        PARENT_INVITE,
+        reconnect_interval=reconnect_interval,
+    )
 
     # 2. 循环心跳上报（60秒一次）
-    print("🔄 节点持续运行中，实时上报存储数据...")
+    safe_print("🔄 节点持续运行中，实时上报存储数据...")
     while True:
         disk_use = get_local_disk_use()
         upload_bw = round(random.uniform(0.2,3.0),2)
@@ -107,9 +147,9 @@ def client_run():
                 "disk_used":disk_use,
                 "upload_bw":upload_bw
             },timeout=10)
-            print(f"✅ 心跳上报成功｜当前存储：{disk_use}G｜上行带宽：{upload_bw}MB/s")
+            safe_print(f"✅ 心跳上报成功｜当前存储：{disk_use}G｜上行带宽：{upload_bw}MB/s")
         except:
-            print("❌ 心跳上报失败，等待重连...")
+            safe_print("❌ 心跳上报失败，等待重连...")
 
         # 在 while True 心跳循环内添加：
         # 自动上报地理位置
@@ -126,7 +166,7 @@ def client_run():
 
 def open_map_window():
     if webview is None:
-        print("ℹ️ 未安装 pywebview，跳过地图窗口")
+        safe_print("ℹ️ 未安装 pywebview，跳过地图窗口")
         return
     html = '''
     <html style="margin:0;padding:0">
@@ -155,7 +195,7 @@ def open_map_window():
 
 if __name__ == "__main__":
     import threading
-    print("🚀 Web3分布式存储激励节点启动成功")
+    safe_print("🚀 Web3分布式存储激励节点启动成功")
     if webview is None:
         client_run()
     else:

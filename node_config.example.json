@@ -1,5 +1,6 @@
 {
   "server_url": "http://127.0.0.1:8000",
   "parent_invite": "",
-  "heartbeat_interval": 60
+  "heartbeat_interval": 60,
+  "reconnect_interval": 10
 }
