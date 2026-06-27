@@ -291,8 +291,8 @@ def make_manage_handler(state):
             if not value:
                 return True
             parsed = urlparse(value)
-            if not parsed.scheme and not parsed.netloc:
-                return True
+            if parsed.scheme not in ("http", "https") or not parsed.netloc:
+                return False
             return self._is_allowed_host(parsed.netloc)
 
         def _validate_host(self):

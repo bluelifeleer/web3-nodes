@@ -2223,38 +2223,46 @@ class MysqlConfigTest(unittest.TestCase):
                 "storage_used_gb": 20,
                 "storage_free_gb": 80,
             }
-            for header_name in ("Origin", "Referer"):
-                state = client_module.create_client_state("http://server", "NODE_A", "MAC_A", "D:/old", 8787)
-                server = client_module.ThreadingHTTPServer(
-                    ("127.0.0.1", 0),
-                    client_module.make_manage_handler(state),
-                )
-                thread = client_module.threading.Thread(target=server.serve_forever, daemon=True)
-                thread.start()
-                connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=5)
-                try:
-                    connection.request(
-                        "POST",
-                        "/api/storage",
-                        body=json.dumps({"storage_dir": "D:/new"}).encode("utf-8"),
-                        headers={
-                            "Host": f"127.0.0.1:{server.server_port}",
-                            "Content-Type": "application/json",
-                            "X-CSRF-Token": state["csrf_token"],
-                            header_name: "http://attacker.example/console",
-                        },
+            bad_headers = (
+                ("Origin", "http://attacker.example/console"),
+                ("Referer", "http://attacker.example/console"),
+                ("Origin", "null"),
+                ("Origin", "attacker.example"),
+                ("Referer", "attacker.example/path"),
+            )
+            for header_name, header_value in bad_headers:
+                with self.subTest(header_name=header_name, header_value=header_value):
+                    state = client_module.create_client_state("http://server", "NODE_A", "MAC_A", "D:/old", 8787)
+                    server = client_module.ThreadingHTTPServer(
+                        ("127.0.0.1", 0),
+                        client_module.make_manage_handler(state),
                     )
-                    response = connection.getresponse()
-                    body = json.loads(response.read().decode("utf-8"))
+                    thread = client_module.threading.Thread(target=server.serve_forever, daemon=True)
+                    thread.start()
+                    connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=5)
+                    try:
+                        connection.request(
+                            "POST",
+                            "/api/storage",
+                            body=json.dumps({"storage_dir": "D:/new"}).encode("utf-8"),
+                            headers={
+                                "Host": f"127.0.0.1:{server.server_port}",
+                                "Content-Type": "application/json",
+                                "X-CSRF-Token": state["csrf_token"],
+                                header_name: header_value,
+                            },
+                        )
+                        response = connection.getresponse()
+                        body = json.loads(response.read().decode("utf-8"))
 
-                    self.assertEqual(response.status, 403)
-                    self.assertFalse(body["ok"])
-                    self.assertEqual(state["storage_dir"], "D:/old")
-                finally:
-                    connection.close()
-                    server.shutdown()
-                    server.server_close()
-                    thread.join(timeout=5)
+                        self.assertEqual(response.status, 403)
+                        self.assertFalse(body["ok"])
+                        self.assertEqual(state["storage_dir"], "D:/old")
+                    finally:
+                        connection.close()
+                        server.shutdown()
+                        server.server_close()
+                        thread.join(timeout=5)
         finally:
             sys.modules.pop("client", None)
             if old_requests is None:
