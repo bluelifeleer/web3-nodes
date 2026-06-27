@@ -1183,6 +1183,12 @@ def format_node_record(item):
         "quality_score": quality_score,
         "country": item[7] if len(item) > 7 else "",
         "city": item[8] if len(item) > 8 else "",
+        "storage_path": item[9] if len(item) > 9 else "",
+        "storage_status": item[10] if len(item) > 10 and item[10] else "unknown",
+        "storage_error": item[11] if len(item) > 11 else "",
+        "storage_total_gb": item[12] if len(item) > 12 and item[12] is not None else 0,
+        "storage_used_gb": item[13] if len(item) > 13 and item[13] is not None else item[3] or 0,
+        "storage_free_gb": item[14] if len(item) > 14 and item[14] is not None else 0,
     }
 
 
@@ -1217,7 +1223,9 @@ def select_node_rows():
     current_cursor().execute("""
     SELECT un.user_address,un.invite_code,un.parent_invite_code,
     np.disk_used,np.online_duration,np.upload_bandwidth,np.update_time,
-    nl.country,nl.city
+    nl.country,nl.city,
+    np.storage_path,np.storage_status,np.storage_error,
+    np.storage_total_gb,np.storage_used_gb,np.storage_free_gb
     FROM user_node un
     LEFT JOIN node_power np ON un.user_address=np.user_address
     LEFT JOIN node_location nl ON un.user_address=nl.user_address
@@ -1644,6 +1652,10 @@ ADMIN_HTML = '''
                     <th>个人推广码</th>
                     <th>上级推广码</th>
                     <th>存储占用G</th>
+                    <th>总容量G</th>
+                    <th>已用G</th>
+                    <th>可用容量G</th>
+                    <th>目录状态</th>
                     <th>在线时长(分)</th>
                     <th>上行带宽</th>
                     <th>在线状态</th>
@@ -1677,6 +1689,15 @@ ADMIN_HTML = '''
                 </tr>
             </thead>
             <tbody id="rewardTable"></tbody>
+        </table>
+    </div>
+
+    <div class="box commercial-card">
+        <h3>提现申请</h3>
+        <button onclick="getAdminWithdrawals()">刷新提现</button>
+        <table>
+            <thead><tr><th>ID</th><th>用户/节点</th><th>钱包</th><th>金额</th><th>状态</th><th>备注</th><th>操作</th></tr></thead>
+            <tbody id="withdrawalTable"></tbody>
         </table>
     </div>
 
@@ -1825,6 +1846,10 @@ function getNodes(){
                 <td>${item.invite_code}</td>
                 <td>${item.parent_code||"无"}</td>
                 <td>${item.disk_used}</td>
+                <td>${item.storage_total_gb || 0}</td>
+                <td>${item.storage_used_gb || item.disk_used || 0}</td>
+                <td>${item.storage_free_gb || 0}</td>
+                <td>${item.storage_status || "unknown"} ${item.storage_error ? "｜" + item.storage_error : ""}</td>
                 <td>${item.online_min}</td>
                 <td>${item.upload_bw}</td>
                 <td>${item.online_status}</td>
@@ -1910,6 +1935,41 @@ function getInviteTree(){
     .then(data=>{
         document.getElementById("inviteTreeBox").innerText = renderInviteLines(data.data, 0).join("\\n") || "暂无邀请关系";
     })
+}
+
+function getAdminWithdrawals(){
+    adminFetch("/api/admin/withdrawals")
+    .then(res=>res.json())
+    .then(data=>{
+        let html = "";
+        (data.data || []).forEach(item=>{
+            const owner = escHtml(item.user_id || item.node_address || "");
+            const wallet = escHtml(item.wallet_address || "");
+            const amount = escHtml(item.amount || 0);
+            const status = escHtml(item.status || "");
+            const note = escHtml(item.admin_note || "");
+            const actions = item.status === "pending"
+                ? `<button onclick="reviewWithdrawal(${item.id},'approved')">通过</button><button onclick="reviewWithdrawal(${item.id},'rejected')">驳回</button>`
+                : item.status === "approved"
+                    ? `<button onclick="reviewWithdrawal(${item.id},'paid')">标记已提现</button><button onclick="reviewWithdrawal(${item.id},'rejected')">驳回</button>`
+                    : "已完成";
+            html += `<tr><td>${item.id}</td><td>${owner}</td><td>${wallet}</td><td>${amount}</td><td>${status}</td><td><input id="withdrawalNote-${item.id}" value="${note}" placeholder="审核备注" style="width:120px"></td><td>${actions}</td></tr>`;
+        });
+        document.getElementById("withdrawalTable").innerHTML = html || '<tr><td colspan="7">暂无提现申请</td></tr>';
+    });
+}
+
+function reviewWithdrawal(id,status){
+    const noteInput = document.getElementById(`withdrawalNote-${id}`);
+    const admin_note = noteInput ? noteInput.value : "";
+    adminFetch(`/api/admin/withdrawals/${id}/review`, {
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({status,admin_note})
+    }).then(res=>res.json()).then(data=>{
+        alert(data.msg || "操作完成");
+        getAdminWithdrawals();
+    });
 }
 
 function getFileList(){
@@ -2091,6 +2151,7 @@ function refreshAdminData(){
     getLeaderboard();
     getDailyReward();
     getInviteTree();
+    getAdminWithdrawals();
     if(map){ loadNodeMap(); }
     setAdminAutoRefreshStatus(`自动刷新中｜上次刷新 ${new Date().toLocaleTimeString()}`);
 }

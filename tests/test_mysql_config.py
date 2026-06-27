@@ -1451,6 +1451,30 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertEqual(record["online_status"], "在线")
         self.assertIn("quality_score", record)
 
+    def test_node_record_formats_capacity_fields(self):
+        server_main = load_server_main()
+        now = server_main.datetime.now()
+
+        record = server_main.format_node_record((
+            "NODE_A", "INVITE1", "", 12.5, 90, 3.2, now, "中国", "深圳",
+            "D:/web3-node-data", "ok", "", 512, 128, 384,
+        ))
+
+        self.assertEqual(record["storage_path"], "D:/web3-node-data")
+        self.assertEqual(record["storage_status"], "ok")
+        self.assertEqual(record["storage_total_gb"], 512)
+        self.assertEqual(record["storage_used_gb"], 128)
+        self.assertEqual(record["storage_free_gb"], 384)
+
+    def test_admin_page_renders_capacity_and_withdrawal_sections(self):
+        server_main = load_server_main(ADMIN_API_TOKEN="secret-token")
+
+        self.assertIn("总容量", server_main.ADMIN_HTML)
+        self.assertIn("可用容量", server_main.ADMIN_HTML)
+        self.assertIn("提现申请", server_main.ADMIN_HTML)
+        self.assertIn("getAdminWithdrawals", server_main.ADMIN_HTML)
+        self.assertIn("reviewWithdrawal", server_main.ADMIN_HTML)
+
     def test_auto_settle_reward_uses_daily_snapshot_key(self):
         server_main = load_server_main()
         executed = []
