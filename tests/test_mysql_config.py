@@ -6,6 +6,7 @@ import sys
 import tempfile
 import types
 import unittest
+import urllib.request
 from pathlib import Path
 
 
@@ -1751,6 +1752,223 @@ class MysqlConfigTest(unittest.TestCase):
             self.assertEqual(state["last_heartbeat"], "")
             self.assertIn("500", state["last_error"])
         finally:
+            sys.modules.pop("client", None)
+            if old_requests is None:
+                sys.modules.pop("requests", None)
+            else:
+                sys.modules["requests"] = old_requests
+            if old_webview is None:
+                sys.modules.pop("webview", None)
+            else:
+                sys.modules["webview"] = old_webview
+
+    def test_client_management_routes_return_console_status_and_storage_updates(self):
+        old_requests = sys.modules.get("requests")
+        old_webview = sys.modules.get("webview")
+        try:
+            sys.modules["requests"] = types.SimpleNamespace(post=lambda *args, **kwargs: None, get=lambda *args, **kwargs: None)
+            sys.modules["webview"] = None
+            sys.modules.pop("client", None)
+            client_module = importlib.import_module("client")
+            inspected = []
+
+            def fake_inspect(storage_dir):
+                inspected.append(storage_dir)
+                used = 20 if storage_dir == "D:/node" else 40
+                return {
+                    "storage_path": storage_dir,
+                    "storage_status": "ok",
+                    "storage_total_gb": 100,
+                    "storage_used_gb": used,
+                    "storage_free_gb": 100 - used,
+                }
+
+            client_module.inspect_storage_dir = fake_inspect
+            state = client_module.create_client_state("http://server", "NODE_A", "MAC_A", "D:/node", 8787)
+            server = client_module.ThreadingHTTPServer(
+                ("127.0.0.1", 0),
+                client_module.make_manage_handler(state),
+            )
+            thread = client_module.threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            base_url = f"http://127.0.0.1:{server.server_port}"
+            try:
+                with urllib.request.urlopen(f"{base_url}/", timeout=5) as response:
+                    html = response.read().decode("utf-8")
+                self.assertIn("节点控制台", html)
+
+                with urllib.request.urlopen(f"{base_url}/api/status", timeout=5) as response:
+                    status_payload = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(status_payload["data"]["storage"]["storage_total_gb"], 100)
+                self.assertEqual(status_payload["data"]["storage"]["storage_free_gb"], 80)
+
+                storage_request = urllib.request.Request(
+                    f"{base_url}/api/storage",
+                    data=json.dumps({"storage_dir": "D:/new"}).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with urllib.request.urlopen(storage_request, timeout=5) as response:
+                    storage_payload = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(state["storage_dir"], "D:/new")
+                self.assertEqual(storage_payload["data"]["storage"]["storage_path"], "D:/new")
+                self.assertEqual(storage_payload["data"]["storage"]["storage_used_gb"], 40)
+
+                refresh_request = urllib.request.Request(
+                    f"{base_url}/api/refresh",
+                    data=b"{}",
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with urllib.request.urlopen(refresh_request, timeout=5) as response:
+                    refresh_payload = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(refresh_payload["data"]["storage"]["storage_path"], "D:/new")
+                self.assertEqual(refresh_payload["data"]["storage"]["storage_free_gb"], 60)
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+        finally:
+            sys.modules.pop("client", None)
+            if old_requests is None:
+                sys.modules.pop("requests", None)
+            else:
+                sys.modules["requests"] = old_requests
+            if old_webview is None:
+                sys.modules.pop("webview", None)
+            else:
+                sys.modules["webview"] = old_webview
+
+    def test_client_storage_route_update_feeds_next_heartbeat_payload(self):
+        old_requests = sys.modules.get("requests")
+        old_webview = sys.modules.get("webview")
+        try:
+            sys.modules["requests"] = types.SimpleNamespace(post=lambda *args, **kwargs: None, get=lambda *args, **kwargs: None)
+            sys.modules["webview"] = None
+            sys.modules.pop("client", None)
+            client_module = importlib.import_module("client")
+            inspected = []
+
+            def fake_inspect(storage_dir):
+                inspected.append(storage_dir)
+                used = 10 if storage_dir == "D:/old" else 55
+                return {
+                    "storage_path": storage_dir,
+                    "storage_status": "ok",
+                    "storage_total_gb": 120,
+                    "storage_used_gb": used,
+                    "storage_free_gb": 120 - used,
+                }
+
+            client_module.inspect_storage_dir = fake_inspect
+            state = client_module.create_client_state("http://server", "NODE_A", "MAC_A", "D:/old", 8787)
+            server = client_module.ThreadingHTTPServer(
+                ("127.0.0.1", 0),
+                client_module.make_manage_handler(state),
+            )
+            thread = client_module.threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                request = urllib.request.Request(
+                    f"http://127.0.0.1:{server.server_port}/api/storage",
+                    data=json.dumps({"storage_dir": "D:/console"}).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with urllib.request.urlopen(request, timeout=5) as response:
+                    self.assertEqual(response.status, 200)
+
+                inspected.clear()
+                heartbeat_payload = client_module.build_heartbeat_payload(state, 2.5)
+
+                self.assertEqual(inspected, ["D:/console"])
+                self.assertEqual(heartbeat_payload["storage_path"], "D:/console")
+                self.assertEqual(heartbeat_payload["disk_used"], 55)
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+        finally:
+            sys.modules.pop("client", None)
+            if old_requests is None:
+                sys.modules.pop("requests", None)
+            else:
+                sys.modules["requests"] = old_requests
+            if old_webview is None:
+                sys.modules.pop("webview", None)
+            else:
+                sys.modules["webview"] = old_webview
+
+    def test_client_run_starts_management_server_and_prints_local_url(self):
+        old_requests = sys.modules.get("requests")
+        old_webview = sys.modules.get("webview")
+        old_argv = sys.argv[:]
+        prints = []
+        started_states = []
+        posts = []
+
+        class StopAfterHeartbeat(Exception):
+            pass
+
+        class FakeManageServer:
+            def __init__(self):
+                self.shutdown_called = False
+                self.close_called = False
+
+            def shutdown(self):
+                self.shutdown_called = True
+
+            def server_close(self):
+                self.close_called = True
+
+        fake_server = FakeManageServer()
+
+        def fake_post(url, json=None, timeout=10):
+            posts.append((url, json, timeout))
+            return types.SimpleNamespace(status_code=200)
+
+        try:
+            sys.argv = ["client.py"]
+            sys.modules["requests"] = types.SimpleNamespace(post=fake_post, get=lambda *args, **kwargs: None)
+            sys.modules["webview"] = None
+            sys.modules.pop("client", None)
+            client_module = importlib.import_module("client")
+            client_module.load_client_config = lambda: {
+                "server_url": "http://example.com",
+                "parent_invite": "",
+                "heartbeat_interval": 60,
+                "reconnect_interval": 1,
+                "storage_dir": "D:/node",
+                "manage_port": 8899,
+            }
+            client_module.get_device_mac = lambda: "MAC_A"
+            client_module.wait_for_registration = lambda *args, **kwargs: True
+            client_module.inspect_storage_dir = lambda storage_dir: {
+                "storage_status": "ok",
+                "storage_total_gb": 100,
+                "storage_used_gb": 20,
+                "storage_free_gb": 80,
+            }
+            client_module.random.uniform = lambda *args, **kwargs: 1.0
+            client_module.safe_print = lambda message: prints.append(message)
+
+            def fake_start_manage_server(state):
+                started_states.append(dict(state))
+                return fake_server
+
+            client_module.start_manage_server = fake_start_manage_server
+            client_module.time.sleep = lambda seconds: (_ for _ in ()).throw(StopAfterHeartbeat())
+
+            with self.assertRaises(StopAfterHeartbeat):
+                client_module.client_run()
+
+            self.assertEqual(started_states[0]["manage_port"], 8899)
+            self.assertTrue(any("http://127.0.0.1:8899" in item for item in prints))
+            self.assertTrue(any(url.endswith("/heartbeat") for url, _, _ in posts))
+            self.assertTrue(fake_server.shutdown_called)
+            self.assertTrue(fake_server.close_called)
+        finally:
+            sys.argv = old_argv
             sys.modules.pop("client", None)
             if old_requests is None:
                 sys.modules.pop("requests", None)
