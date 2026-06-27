@@ -213,6 +213,42 @@ def client_status_payload(state):
     }
 
 
+def build_heartbeat_payload(state, upload_bw):
+    storage_info = inspect_storage_dir(state["storage_dir"])
+    state["storage"] = storage_info
+    return {
+        "user_addr": state["user_addr"],
+        "node_mac": state["node_mac"],
+        "disk_used": storage_info["storage_used_gb"],
+        "upload_bw": upload_bw,
+        **storage_info,
+    }
+
+
+def ensure_success_response(response):
+    if hasattr(response, "raise_for_status"):
+        response.raise_for_status()
+        return
+    status_code = int(getattr(response, "status_code", 200) or 200)
+    if status_code >= 400:
+        raise RuntimeError(f"heartbeat failed with HTTP {status_code}")
+
+
+def report_heartbeat(state, upload_bw, post_func=requests.post):
+    payload = build_heartbeat_payload(state, upload_bw)
+    try:
+        response = post_func(f"{state['server_url']}/heartbeat", json=payload, timeout=10)
+        ensure_success_response(response)
+        state["running"] = True
+        state["last_heartbeat"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        state["last_error"] = ""
+        return True, payload
+    except Exception as exc:
+        state["running"] = False
+        state["last_error"] = str(exc)
+        return False, payload
+
+
 def make_manage_handler(state):
     class ManageHandler(BaseHTTPRequestHandler):
         def log_message(self, format, *args):
@@ -379,25 +415,11 @@ def client_run():
         # 2. 循环心跳上报（60秒一次）
         safe_print("🔄 节点持续运行中，实时上报存储数据...")
         while True:
-            storage_info = inspect_storage_dir(NODE_STORAGE_DIR)
-            state["storage"] = storage_info
             upload_bw = round(random.uniform(0.2,3.0),2)
-            try:
-                payload = {
-                    "user_addr":user_addr,
-                    "node_mac":device_mac,
-                    "disk_used":storage_info["storage_used_gb"],
-                    "upload_bw":upload_bw,
-                    **storage_info,
-                }
-                requests.post(f"{SERVER_URL}/heartbeat",json=payload,timeout=10)
-                state["running"] = True
-                state["last_heartbeat"] = time.strftime("%Y-%m-%d %H:%M:%S")
-                state["last_error"] = ""
-                safe_print(f"✅ 心跳上报成功｜当前存储：{storage_info['storage_used_gb']}G｜上行带宽：{upload_bw}MB/s")
-            except Exception as exc:
-                state["running"] = False
-                state["last_error"] = str(exc)
+            heartbeat_ok, payload = report_heartbeat(state, upload_bw)
+            if heartbeat_ok:
+                safe_print(f"✅ 心跳上报成功｜当前存储：{payload['storage_used_gb']}G｜上行带宽：{upload_bw}MB/s")
+            else:
                 safe_print("❌ 心跳上报失败，等待重连...")
 
             # 在 while True 心跳循环内添加：

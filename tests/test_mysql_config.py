@@ -1685,6 +1685,82 @@ class MysqlConfigTest(unittest.TestCase):
             else:
                 sys.modules["webview"] = old_webview
 
+    def test_client_heartbeat_payload_uses_state_storage_dir(self):
+        old_requests = sys.modules.get("requests")
+        old_webview = sys.modules.get("webview")
+        try:
+            sys.modules["requests"] = types.SimpleNamespace(post=lambda *args, **kwargs: None, get=lambda *args, **kwargs: None)
+            sys.modules["webview"] = None
+            sys.modules.pop("client", None)
+            client_module = importlib.import_module("client")
+            inspected = []
+
+            def fake_inspect(storage_dir):
+                inspected.append(storage_dir)
+                return {
+                    "storage_status": "ok",
+                    "storage_total_gb": 200,
+                    "storage_used_gb": 30,
+                    "storage_free_gb": 170,
+                }
+
+            client_module.inspect_storage_dir = fake_inspect
+            state = client_module.create_client_state("http://server", "NODE_A", "MAC_A", "D:/old", 8787)
+            inspected.clear()
+            state["storage_dir"] = "D:/new"
+
+            payload = client_module.build_heartbeat_payload(state, 1.5)
+
+            self.assertEqual(inspected, ["D:/new"])
+            self.assertEqual(payload["disk_used"], 30)
+            self.assertEqual(state["storage"]["storage_free_gb"], 170)
+        finally:
+            sys.modules.pop("client", None)
+            if old_requests is None:
+                sys.modules.pop("requests", None)
+            else:
+                sys.modules["requests"] = old_requests
+            if old_webview is None:
+                sys.modules.pop("webview", None)
+            else:
+                sys.modules["webview"] = old_webview
+
+    def test_client_heartbeat_http_error_updates_failure_state(self):
+        old_requests = sys.modules.get("requests")
+        old_webview = sys.modules.get("webview")
+        try:
+            sys.modules["requests"] = types.SimpleNamespace(post=lambda *args, **kwargs: None, get=lambda *args, **kwargs: None)
+            sys.modules["webview"] = None
+            sys.modules.pop("client", None)
+            client_module = importlib.import_module("client")
+            client_module.inspect_storage_dir = lambda storage_dir: {
+                "storage_status": "ok",
+                "storage_total_gb": 100,
+                "storage_used_gb": 20,
+                "storage_free_gb": 80,
+            }
+            state = client_module.create_client_state("http://server", "NODE_A", "MAC_A", "D:/node", 8787)
+            state["last_heartbeat"] = ""
+
+            response = types.SimpleNamespace(status_code=500, text="server error")
+            ok, payload = client_module.report_heartbeat(state, 2.0, post_func=lambda *args, **kwargs: response)
+
+            self.assertFalse(ok)
+            self.assertEqual(payload["disk_used"], 20)
+            self.assertFalse(state["running"])
+            self.assertEqual(state["last_heartbeat"], "")
+            self.assertIn("500", state["last_error"])
+        finally:
+            sys.modules.pop("client", None)
+            if old_requests is None:
+                sys.modules.pop("requests", None)
+            else:
+                sys.modules["requests"] = old_requests
+            if old_webview is None:
+                sys.modules.pop("webview", None)
+            else:
+                sys.modules["webview"] = old_webview
+
     def test_client_storage_probe_reports_unavailable_directory(self):
         old_requests = sys.modules.get("requests")
         old_webview = sys.modules.get("webview")
