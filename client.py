@@ -6,6 +6,7 @@ import subprocess
 import random
 import requests
 import sys
+import shutil
 from pathlib import Path
 import os
 import json
@@ -21,6 +22,7 @@ PARENT_INVITE = ""
 HEARTBEAT_INTERVAL = 60
 RECONNECT_INTERVAL = 10
 NODE_STORAGE_DIR = ""
+MANAGE_PORT = 8787
 
 
 def safe_print(message):
@@ -37,6 +39,7 @@ def load_client_config(config_path="node_config.json"):
         "heartbeat_interval": HEARTBEAT_INTERVAL,
         "reconnect_interval": RECONNECT_INTERVAL,
         "storage_dir": NODE_STORAGE_DIR,
+        "manage_port": MANAGE_PORT,
     }
     path = Path(config_path)
     if path.exists():
@@ -51,6 +54,7 @@ def load_client_config(config_path="node_config.json"):
     config["heartbeat_interval"] = int(os.getenv("NODE_HEARTBEAT_INTERVAL", config["heartbeat_interval"]))
     config["reconnect_interval"] = int(os.getenv("NODE_RECONNECT_INTERVAL", config["reconnect_interval"]))
     config["storage_dir"] = os.getenv("NODE_STORAGE_DIR", config["storage_dir"])
+    config["manage_port"] = int(os.getenv("NODE_MANAGE_PORT", config["manage_port"]))
     return config
 
 
@@ -79,6 +83,13 @@ def get_storage_dir_arg():
     return ""
 
 
+def get_manage_port_arg():
+    for arg in sys.argv[1:]:
+        if arg.startswith("manage_port=") or arg.startswith("--manage-port=") or arg.startswith("--manage_port="):
+            return int(arg.split("=", 1)[1].strip())
+    return 0
+
+
 def ensure_storage_dir(storage_dir):
     if not storage_dir:
         return None
@@ -96,6 +107,44 @@ def get_directory_size_bytes(path):
         except OSError:
             continue
     return total
+
+
+def inspect_storage_dir(storage_dir):
+    if not storage_dir:
+        return {
+            "storage_path": "",
+            "storage_status": "unavailable",
+            "storage_error": "未指定存储目录",
+            "storage_total_gb": 0,
+            "storage_used_gb": 0,
+            "storage_free_gb": 0,
+        }
+    try:
+        path = ensure_storage_dir(storage_dir)
+        if path is None or not path.is_dir():
+            raise RuntimeError("存储路径不是目录")
+        probe = path / ".filezall_write_probe"
+        probe.write_text("ok", encoding="utf-8")
+        probe.unlink(missing_ok=True)
+        usage = shutil.disk_usage(path)
+        dir_used = get_directory_size_bytes(path)
+        return {
+            "storage_path": str(path),
+            "storage_status": "ok",
+            "storage_error": "",
+            "storage_total_gb": round(usage.total / (1024 ** 3), 2),
+            "storage_used_gb": round(dir_used / (1024 ** 3), 2),
+            "storage_free_gb": round(usage.free / (1024 ** 3), 2),
+        }
+    except Exception as exc:
+        return {
+            "storage_path": str(storage_dir),
+            "storage_status": "unavailable",
+            "storage_error": str(exc),
+            "storage_total_gb": 0,
+            "storage_used_gb": 0,
+            "storage_free_gb": 0,
+        }
 
 # 生成唯一设备指纹（防多开、防作弊）
 def get_device_mac():
@@ -156,13 +205,14 @@ def wait_for_registration(
 
 # 节点核心运行逻辑
 def client_run():
-    global SERVER_URL, PARENT_INVITE, HEARTBEAT_INTERVAL, NODE_STORAGE_DIR
+    global SERVER_URL, PARENT_INVITE, HEARTBEAT_INTERVAL, NODE_STORAGE_DIR, MANAGE_PORT
     config = load_client_config()
     SERVER_URL = config["server_url"]
     PARENT_INVITE = get_invite_arg() or config["parent_invite"]
     HEARTBEAT_INTERVAL = int(config["heartbeat_interval"])
     reconnect_interval = int(config["reconnect_interval"])
     NODE_STORAGE_DIR = get_storage_dir_arg() or config["storage_dir"]
+    MANAGE_PORT = get_manage_port_arg() or int(config["manage_port"])
     if NODE_STORAGE_DIR:
         ensure_storage_dir(NODE_STORAGE_DIR)
         safe_print(f"📁 节点存储目录：{Path(NODE_STORAGE_DIR).expanduser()}")
@@ -182,16 +232,18 @@ def client_run():
     # 2. 循环心跳上报（60秒一次）
     safe_print("🔄 节点持续运行中，实时上报存储数据...")
     while True:
-        disk_use = get_local_disk_use(NODE_STORAGE_DIR)
+        storage_info = inspect_storage_dir(NODE_STORAGE_DIR)
         upload_bw = round(random.uniform(0.2,3.0),2)
         try:
-            requests.post(f"{SERVER_URL}/heartbeat",json={
+            payload = {
                 "user_addr":user_addr,
                 "node_mac":device_mac,
-                "disk_used":disk_use,
-                "upload_bw":upload_bw
-            },timeout=10)
-            safe_print(f"✅ 心跳上报成功｜当前存储：{disk_use}G｜上行带宽：{upload_bw}MB/s")
+                "disk_used":storage_info["storage_used_gb"],
+                "upload_bw":upload_bw,
+                **storage_info,
+            }
+            requests.post(f"{SERVER_URL}/heartbeat",json=payload,timeout=10)
+            safe_print(f"✅ 心跳上报成功｜当前存储：{storage_info['storage_used_gb']}G｜上行带宽：{upload_bw}MB/s")
         except:
             safe_print("❌ 心跳上报失败，等待重连...")
 

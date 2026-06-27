@@ -1582,6 +1582,52 @@ class MysqlConfigTest(unittest.TestCase):
             else:
                 sys.modules["webview"] = old_webview
 
+    def test_client_config_supports_manage_port(self):
+        old_requests = sys.modules.get("requests")
+        old_webview = sys.modules.get("webview")
+        config_path = Path("tests/node_config.json")
+        config_path.write_text('{"manage_port":8788,"storage_dir":"D:/node"}', encoding="utf-8")
+        try:
+            sys.modules["requests"] = types.SimpleNamespace(post=lambda *args, **kwargs: None, get=lambda *args, **kwargs: None)
+            sys.modules["webview"] = None
+            sys.modules.pop("client", None)
+            client_module = importlib.import_module("client")
+            config = client_module.load_client_config(config_path)
+            self.assertEqual(config["manage_port"], 8788)
+        finally:
+            config_path.unlink(missing_ok=True)
+            sys.modules.pop("client", None)
+            if old_requests is None:
+                sys.modules.pop("requests", None)
+            else:
+                sys.modules["requests"] = old_requests
+            if old_webview is None:
+                sys.modules.pop("webview", None)
+            else:
+                sys.modules["webview"] = old_webview
+
+    def test_client_storage_probe_reports_unavailable_directory(self):
+        old_requests = sys.modules.get("requests")
+        old_webview = sys.modules.get("webview")
+        try:
+            sys.modules["requests"] = types.SimpleNamespace(post=lambda *args, **kwargs: None, get=lambda *args, **kwargs: None)
+            sys.modules["webview"] = None
+            sys.modules.pop("client", None)
+            client_module = importlib.import_module("client")
+            result = client_module.inspect_storage_dir("")
+            self.assertEqual(result["storage_status"], "unavailable")
+            self.assertIn("storage_error", result)
+        finally:
+            sys.modules.pop("client", None)
+            if old_requests is None:
+                sys.modules.pop("requests", None)
+            else:
+                sys.modules["requests"] = old_requests
+            if old_webview is None:
+                sys.modules.pop("webview", None)
+            else:
+                sys.modules["webview"] = old_webview
+
     def test_client_registration_retries_until_service_recovers(self):
         old_requests = sys.modules.get("requests")
         old_webview = sys.modules.get("webview")

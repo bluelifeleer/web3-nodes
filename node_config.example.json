@@ -3,5 +3,6 @@
   "parent_invite": "",
   "heartbeat_interval": 60,
   "reconnect_interval": 10,
+  "manage_port": 8787,
   "storage_dir": "./node_storage/client"
 }
