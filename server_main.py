@@ -1273,22 +1273,26 @@ HOME_HTML = '''
     <title>Web3 节点激励与文件分享系统</title>
     <style>
         *{box-sizing:border-box;}
-        body{margin:0;font-family:Arial,"Microsoft YaHei",sans-serif;background:#f6f8fb;color:#172033;}
+        body{margin:0;font-family:Arial,"Microsoft YaHei",sans-serif;background:#f4f7fb;color:#172033;}
         a{text-decoration:none;color:inherit;}
-        .hero{min-height:88vh;display:grid;align-items:center;background:
-            linear-gradient(120deg,rgba(8,28,61,.92),rgba(13,79,92,.86)),
+        .hero{min-height:90vh;display:grid;align-items:center;background:
+            linear-gradient(120deg,rgba(7,19,42,.94),rgba(13,70,83,.86),rgba(21,91,70,.78)),
             url("https://images.unsplash.com/photo-1558494949-ef010cbdcc31?auto=format&fit=crop&w=1800&q=80") center/cover;color:white;}
         .wrap{width:min(1180px,calc(100vw - 32px));margin:0 auto;}
         nav{display:flex;justify-content:space-between;align-items:center;padding:26px 0;gap:18px;}
         .brand{font-weight:800;font-size:20px;letter-spacing:.2px;}
-        .navlinks{display:flex;gap:12px;flex-wrap:wrap;}
-        .navlinks a,.btn{display:inline-flex;align-items:center;justify-content:center;min-height:40px;padding:0 16px;border-radius:7px;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.2);}
+        .tagline{color:#b8dfe5;font-size:14px;border:1px solid rgba(255,255,255,.18);border-radius:999px;padding:8px 12px;background:rgba(255,255,255,.08);}
+        .btn{display:inline-flex;align-items:center;justify-content:center;min-height:42px;padding:0 18px;border-radius:7px;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.2);}
         .hero-grid{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(320px,.9fr);gap:42px;align-items:center;padding:58px 0 74px;}
+        .eyebrow{display:inline-flex;align-items:center;gap:8px;margin-bottom:18px;padding:8px 12px;border:1px solid rgba(94,234,212,.35);border-radius:999px;color:#b6fff1;background:rgba(8,47,73,.42);font-size:14px;}
         h1{font-size:56px;line-height:1.05;margin:0 0 22px;letter-spacing:0;}
         .lead{font-size:18px;line-height:1.8;color:#d9eef2;max-width:680px;}
         .actions{display:flex;gap:14px;flex-wrap:wrap;margin-top:30px;}
         .primary{background:#30d5a0;color:#06251f;border-color:#30d5a0;font-weight:700;}
         .secondary{background:rgba(255,255,255,.1);color:white;}
+        .signal-row{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:28px;max-width:700px;}
+        .signal{border-left:2px solid #30d5a0;background:rgba(255,255,255,.08);border-radius:7px;padding:12px 14px;color:#d7f7f1;}
+        .signal b{display:block;color:white;margin-bottom:4px;}
         .console{background:rgba(7,16,31,.72);border:1px solid rgba(255,255,255,.16);border-radius:8px;padding:22px;box-shadow:0 20px 60px rgba(0,0,0,.25);}
         .console h2{font-size:18px;margin:0 0 16px;}
         .metric{display:grid;grid-template-columns:1fr auto;gap:8px;padding:13px 0;border-bottom:1px solid rgba(255,255,255,.12);}
@@ -1312,6 +1316,7 @@ HOME_HTML = '''
             .hero-grid,.cards,.flow{grid-template-columns:1fr;}
             h1{font-size:40px;}
             nav{align-items:flex-start;flex-direction:column;}
+            .signal-row{grid-template-columns:1fr;}
         }
     </style>
 </head>
@@ -1320,20 +1325,22 @@ HOME_HTML = '''
         <div class="wrap">
             <nav>
                 <div class="brand">Web3 Nodes Store</div>
-                <div class="navlinks">
-                    <a href="/user/login">用户登录</a>
-                    <a href="/user/upload">上传文件</a>
-                    <a href="/admin/login">后台登录</a>
-                </div>
+                <div class="tagline">企业级分布式存储网络</div>
             </nav>
             <div class="hero-grid">
                 <main>
+                    <div class="eyebrow">存储 · 分享 · 节点激励 · 收益结算</div>
                     <h1>Web3 节点激励与文件分享系统</h1>
                     <p class="lead">面向节点运营、私有文件分发和收益结算的企业级分布式存储一体化平台。用户上传文件生成可控分享链接，节点贡献存储与带宽获得积分，后台实时查看网络、收益和提现审核。</p>
                     <div class="actions">
                         <a class="btn primary" href="/user/login">开始使用</a>
                         <a class="btn secondary" href="/user/upload">上传并创建分享</a>
                         <a class="btn secondary" href="/admin">进入服务端后台</a>
+                    </div>
+                    <div class="signal-row">
+                        <div class="signal"><b>用户侧闭环</b>登录、上传、分享、收益都在同一条路径里完成。</div>
+                        <div class="signal"><b>节点侧增长</b>用在线、存储、下载贡献驱动节点积分。</div>
+                        <div class="signal"><b>运营侧可视</b>后台自动刷新网络、文件、收益和提现。</div>
                     </div>
                 </main>
                 <aside class="console">
@@ -1465,21 +1472,18 @@ ADMIN_HTML = '''
         th{background:#f0f5ff;}
         input,button{padding:8px 12px;margin:0 5px;border-radius:4px;border:1px solid #ccc;}
         button{background:#2d8cf0;color:#fff;border:none;cursor:pointer;}
-        .token-bar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;background:#fff7e6;border:1px solid #ffd591;}
-        .token-bar input{min-width:320px;margin-left:0;}
+        .admin-status-bar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;background:#f8fafc;border:1px solid #dbeafe;}
+        .admin-status-bar a{color:#2563eb;text-decoration:none;margin-left:auto;}
         .token-status{color:#8c6d1f;font-size:14px;}
     </style>
     <script type="text/javascript" src="https://webapi.amap.com/maps?v=2.0&key=6f17f9896974a8686929496921212479"></script>
 </head>
 <body>
-    <div class="box token-bar">
-        <strong>后台 Token</strong>
-        <input type="password" id="adminTokenInput" placeholder="请输入 .env 里的 ADMIN_API_TOKEN">
-        <button onclick="saveAdminToken()">保存并加载</button>
-        <button onclick="clearAdminToken()" style="background:#64748b;">清除</button>
-        <a href="/admin/login">后台登录</a>
+    <div class="box admin-status-bar">
+        <strong>服务端后台</strong>
         <span id="adminTokenStatus" class="token-status"></span>
         <span id="adminAutoRefreshStatus" class="token-status"></span>
+        <a href="/admin/login" onclick="localStorage.removeItem('admin_token')">退出登录</a>
     </div>
 
     <div class="box">
@@ -1631,41 +1635,13 @@ function setAdminAutoRefreshStatus(text){
     if(status){ status.innerText = text || ""; }
 }
 
-function initAdminTokenPanel(){
-    const input = document.getElementById("adminTokenInput");
-    const token = getAdminToken();
-    if(input && token){ input.value = token; }
-    setAdminTokenStatus(token ? "Token 已保存，正在加载后台数据" : "请输入 Token 后加载后台数据", !token);
-}
-
-function saveAdminToken(){
-    const input = document.getElementById("adminTokenInput");
-    const token = input ? input.value.trim() : "";
-    if(!token){
-        localStorage.removeItem("admin_token");
-        setAdminTokenStatus("Token 不能为空", true);
-        return;
-    }
-    localStorage.setItem("admin_token", token);
-    setAdminTokenStatus("Token 已保存，正在加载后台数据", false);
-    refreshAdminData();
-}
-
-function clearAdminToken(){
-    localStorage.removeItem("admin_token");
-    const input = document.getElementById("adminTokenInput");
-    if(input){ input.value = ""; }
-    setAdminTokenStatus("Token 已清除，请重新输入", true);
-    window.location.href = "/admin/login";
-}
-
 function adminFetch(url, options){
     const token = getAdminToken();
     if(!token){
-        setAdminTokenStatus("请输入 Token 后加载后台数据", true);
+        setAdminTokenStatus("登录态失效，请重新登录", true);
         return Promise.resolve({
             status: 401,
-            json: () => Promise.resolve({code:401,msg:"请输入后台 Token",data:[]})
+            json: () => Promise.resolve({code:401,msg:"请先登录后台",data:[]})
         });
     }
     options = options || {};
@@ -1929,8 +1905,8 @@ function startAdminAutoRefresh(){
 
 // 自动加载数据
 window.onload = function(){
-    initAdminTokenPanel();
     if(!requireAdminLogin()){ return; }
+    setAdminTokenStatus("登录态已读取，正在加载后台数据", false);
     initMap();
     if(getAdminToken()){
         refreshAdminData();
@@ -2013,10 +1989,16 @@ USER_UPLOAD_HTML = '''
     const resultBox = document.getElementById("resultBox");
     const fileHashInput = document.getElementById("fileHashInput");
     const shareLinkBox = document.getElementById("shareLinkBox");
-    if(!token){
-        notice.hidden = false;
-        resultBox.textContent = "缺少 user_token，请先登录。";
+    function requireUserLogin(){
+        if(!token){
+            notice.hidden = false;
+            resultBox.textContent = "缺少 user_token，请先登录。";
+            window.location.href = "/user/login";
+            return false;
+        }
+        return true;
     }
+    requireUserLogin();
     function authHeaders(extra){
         return Object.assign({"Authorization": `Bearer ${token}`}, extra || {});
     }
@@ -2048,10 +2030,7 @@ USER_UPLOAD_HTML = '''
     }
     document.getElementById("uploadForm").addEventListener("submit", async (event) => {
         event.preventDefault();
-        if(!token){
-            resultBox.textContent = "缺少 user_token，请先登录。";
-            return;
-        }
+        if(!requireUserLogin()){ return; }
         const file = document.getElementById("fileInput").files[0];
         const visibility = document.getElementById("visibilityInput").value;
         const body = new FormData();
@@ -2078,10 +2057,7 @@ USER_UPLOAD_HTML = '''
     });
     document.getElementById("shareForm").addEventListener("submit", async (event) => {
         event.preventDefault();
-        if(!token){
-            resultBox.textContent = "缺少 user_token，请先登录。";
-            return;
-        }
+        if(!requireUserLogin()){ return; }
         const fileHash = fileHashInput.value.trim();
         resultBox.textContent = "正在创建分享...";
         try{
@@ -2103,11 +2079,16 @@ USER_LOGIN_HTML = '''
     <meta charset="UTF-8">
     <title>用户登录</title>
     <style>
-        body{font-family:Arial,"Microsoft YaHei",sans-serif;max-width:980px;margin:32px auto;padding:0 16px;background:#f7f8fb;color:#1f2937;}
+        body{font-family:Arial,"Microsoft YaHei",sans-serif;max-width:760px;margin:32px auto;padding:0 16px;background:#f7f8fb;color:#1f2937;}
         nav{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:18px;}
         a{color:#2563eb;text-decoration:none;}
-        .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px;}
+        .auth-shell{background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:18px;box-shadow:0 16px 36px rgba(15,23,42,.07);}
+        .tabs{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:18px;background:#f1f5f9;border-radius:8px;padding:6px;}
+        .tab{background:transparent;color:#334155;border:0;margin:0;border-radius:6px;}
+        .tab.active{background:#2563eb;color:white;}
         .panel{background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:18px;}
+        .auth-panel{display:none;}
+        .auth-panel.active{display:block;}
         form{display:grid;gap:12px;}
         label{display:grid;gap:6px;font-weight:600;}
         input,button{font-size:15px;padding:10px;border:1px solid #d1d5db;border-radius:6px;}
@@ -2123,8 +2104,25 @@ USER_LOGIN_HTML = '''
         <a href="/user/dashboard">用户面板</a>
         <a href="/user/upload">上传文件</a>
     </nav>
-    <div class="grid">
-        <section class="panel">
+    <div class="auth-shell">
+        <div class="tabs" role="tablist" aria-label="登录方式">
+            <button type="button" class="tab active" data-auth-tab="login">账号登录</button>
+            <button type="button" class="tab" data-auth-tab="register">注册账号</button>
+            <button type="button" class="tab" data-auth-tab="wallet">钱包登录</button>
+        </div>
+        <section class="panel auth-panel active" id="loginPanel" data-auth-panel="login">
+            <h2>账号登录</h2>
+            <form id="passwordLoginForm">
+                <label>用户名
+                    <input id="loginUsername" autocomplete="username" required>
+                </label>
+                <label>密码
+                    <input id="loginPassword" type="password" autocomplete="current-password" required>
+                </label>
+                <button type="submit">登录</button>
+            </form>
+        </section>
+        <section class="panel auth-panel" id="registerPanel" data-auth-panel="register">
             <h2>注册</h2>
             <form id="registerForm">
                 <label>用户名
@@ -2136,19 +2134,7 @@ USER_LOGIN_HTML = '''
                 <button type="submit">注册并登录</button>
             </form>
         </section>
-        <section class="panel">
-            <h2>用户名密码登录</h2>
-            <form id="passwordLoginForm">
-                <label>用户名
-                    <input id="loginUsername" autocomplete="username" required>
-                </label>
-                <label>密码
-                    <input id="loginPassword" type="password" autocomplete="current-password" required>
-                </label>
-                <button type="submit">登录</button>
-            </form>
-        </section>
-        <section class="panel">
+        <section class="panel auth-panel" id="walletPanel" data-auth-panel="wallet">
             <h2>钱包登录</h2>
             <form id="walletLoginForm">
                 <label>钱包地址
@@ -2170,6 +2156,17 @@ USER_LOGIN_HTML = '''
     <script>
     const statusBox = document.getElementById("statusBox");
     function showStatus(message){ statusBox.textContent = message; }
+    function switchAuthTab(nextTab){
+        document.querySelectorAll("[data-auth-tab]").forEach((button) => {
+            button.classList.toggle("active", button.dataset.authTab === nextTab);
+        });
+        document.querySelectorAll("[data-auth-panel]").forEach((panel) => {
+            panel.classList.toggle("active", panel.dataset.authPanel === nextTab);
+        });
+    }
+    document.querySelectorAll("[data-auth-tab]").forEach((button) => {
+        button.addEventListener("click", () => switchAuthTab(button.dataset.authTab));
+    });
     function saveSession(payload){
         const token = payload.token || payload.user_token || "";
         if(!token){ throw new Error(payload.msg || "接口未返回 user_token"); }

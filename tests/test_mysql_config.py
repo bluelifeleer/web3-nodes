@@ -1147,12 +1147,15 @@ class MysqlConfigTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
 
-    def test_admin_page_uses_inline_token_form_instead_of_prompt_popup(self):
+    def test_admin_page_uses_login_session_instead_of_inline_token_form(self):
         server_main = load_server_main(ADMIN_API_TOKEN="secret-token")
 
         self.assertNotIn("prompt(", server_main.ADMIN_HTML)
-        self.assertIn('id="adminTokenInput"', server_main.ADMIN_HTML)
-        self.assertIn("saveAdminToken", server_main.ADMIN_HTML)
+        self.assertNotIn('id="adminTokenInput"', server_main.ADMIN_HTML)
+        self.assertNotIn("saveAdminToken", server_main.ADMIN_HTML)
+        self.assertNotIn("clearAdminToken", server_main.ADMIN_HTML)
+        self.assertIn('id="adminTokenInput"', server_main.ADMIN_LOGIN_HTML)
+        self.assertIn("/api/admin/login", server_main.ADMIN_LOGIN_HTML)
 
     def test_admin_login_page_renders_token_login_form_without_database(self):
         server_main = load_server_main(ADMIN_API_TOKEN="secret-token")
@@ -1176,6 +1179,9 @@ class MysqlConfigTest(unittest.TestCase):
         body = response.get_data(as_text=True)
         self.assertIn("Web3 节点激励与文件分享系统", body)
         self.assertIn("企业级分布式存储", body)
+        self.assertNotIn('class="navlinks"', body)
+        for label in ("开始使用", "上传并创建分享", "进入服务端后台"):
+            self.assertIn(label, body)
         for path in (
             "/user/login",
             "/user/upload",
@@ -1794,6 +1800,8 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertIn("/s/", body)
         self.assertIn("Authorization", body)
         self.assertIn("user_token", body)
+        self.assertIn("requireUserLogin", body)
+        self.assertIn('window.location.href = "/user/login"', body)
 
     def test_user_login_page_renders_forms_and_token_storage(self):
         server_main = load_server_main(SESSION_SECRET="session-secret")
@@ -1804,6 +1812,16 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         body = response.get_data(as_text=True)
         self.assertIn("钱包登录", body)
+        for marker in (
+            'data-auth-tab="login"',
+            'data-auth-tab="register"',
+            'data-auth-tab="wallet"',
+            'id="loginPanel"',
+            'id="registerPanel"',
+            'id="walletPanel"',
+            "switchAuthTab",
+        ):
+            self.assertIn(marker, body)
         self.assertIn("/api/auth/register", body)
         self.assertIn("/api/auth/login", body)
         self.assertIn("/api/wallet/login", body)
