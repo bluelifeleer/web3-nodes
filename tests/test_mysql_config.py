@@ -3,6 +3,7 @@ import io
 import json
 import os
 import sys
+import tempfile
 import types
 import unittest
 from pathlib import Path
@@ -1606,6 +1607,39 @@ class MysqlConfigTest(unittest.TestCase):
             else:
                 sys.modules["webview"] = old_webview
 
+    def test_client_manage_port_env_and_cli_override(self):
+        old_requests = sys.modules.get("requests")
+        old_webview = sys.modules.get("webview")
+        old_env = os.environ.get("NODE_MANAGE_PORT")
+        old_argv = sys.argv[:]
+        try:
+            os.environ["NODE_MANAGE_PORT"] = "8799"
+            sys.argv = ["client.py", "--manage-port=8801"]
+            sys.modules["requests"] = types.SimpleNamespace(post=lambda *args, **kwargs: None, get=lambda *args, **kwargs: None)
+            sys.modules["webview"] = None
+            sys.modules.pop("client", None)
+            client_module = importlib.import_module("client")
+
+            config = client_module.load_client_config("tests/missing-node-config.json")
+
+            self.assertEqual(config["manage_port"], 8799)
+            self.assertEqual(client_module.get_manage_port_arg(), 8801)
+        finally:
+            sys.argv = old_argv
+            if old_env is None:
+                os.environ.pop("NODE_MANAGE_PORT", None)
+            else:
+                os.environ["NODE_MANAGE_PORT"] = old_env
+            sys.modules.pop("client", None)
+            if old_requests is None:
+                sys.modules.pop("requests", None)
+            else:
+                sys.modules["requests"] = old_requests
+            if old_webview is None:
+                sys.modules.pop("webview", None)
+            else:
+                sys.modules["webview"] = old_webview
+
     def test_client_storage_probe_reports_unavailable_directory(self):
         old_requests = sys.modules.get("requests")
         old_webview = sys.modules.get("webview")
@@ -1614,10 +1648,118 @@ class MysqlConfigTest(unittest.TestCase):
             sys.modules["webview"] = None
             sys.modules.pop("client", None)
             client_module = importlib.import_module("client")
+            client_module.get_local_disk_use = lambda storage_dir="": 0.1
             result = client_module.inspect_storage_dir("")
             self.assertEqual(result["storage_status"], "unavailable")
             self.assertIn("storage_error", result)
         finally:
+            sys.modules.pop("client", None)
+            if old_requests is None:
+                sys.modules.pop("requests", None)
+            else:
+                sys.modules["requests"] = old_requests
+            if old_webview is None:
+                sys.modules.pop("webview", None)
+            else:
+                sys.modules["webview"] = old_webview
+
+    def test_client_storage_probe_preserves_existing_fixed_probe_file(self):
+        old_requests = sys.modules.get("requests")
+        old_webview = sys.modules.get("webview")
+        try:
+            sys.modules["requests"] = types.SimpleNamespace(post=lambda *args, **kwargs: None, get=lambda *args, **kwargs: None)
+            sys.modules["webview"] = None
+            sys.modules.pop("client", None)
+            client_module = importlib.import_module("client")
+            with tempfile.TemporaryDirectory() as tmp:
+                storage_dir = Path(tmp)
+                existing_probe = storage_dir / ".filezall_write_probe"
+                existing_probe.write_text("user data", encoding="utf-8")
+
+                result = client_module.inspect_storage_dir(str(storage_dir))
+
+                self.assertEqual(result["storage_status"], "ok")
+                self.assertTrue(existing_probe.exists())
+                self.assertEqual(existing_probe.read_text(encoding="utf-8"), "user data")
+        finally:
+            sys.modules.pop("client", None)
+            if old_requests is None:
+                sys.modules.pop("requests", None)
+            else:
+                sys.modules["requests"] = old_requests
+            if old_webview is None:
+                sys.modules.pop("webview", None)
+            else:
+                sys.modules["webview"] = old_webview
+
+    def test_client_storage_probe_without_directory_preserves_ipfs_fallback(self):
+        old_requests = sys.modules.get("requests")
+        old_webview = sys.modules.get("webview")
+        try:
+            sys.modules["requests"] = types.SimpleNamespace(post=lambda *args, **kwargs: None, get=lambda *args, **kwargs: None)
+            sys.modules["webview"] = None
+            sys.modules.pop("client", None)
+            client_module = importlib.import_module("client")
+            client_module.get_local_disk_use = lambda storage_dir="": 12.34
+
+            result = client_module.inspect_storage_dir("")
+
+            self.assertEqual(result["storage_status"], "unavailable")
+            self.assertEqual(result["storage_error"], "未指定存储目录")
+            self.assertEqual(result["storage_used_gb"], 12.34)
+        finally:
+            sys.modules.pop("client", None)
+            if old_requests is None:
+                sys.modules.pop("requests", None)
+            else:
+                sys.modules["requests"] = old_requests
+            if old_webview is None:
+                sys.modules.pop("webview", None)
+            else:
+                sys.modules["webview"] = old_webview
+
+    def test_client_run_reports_bad_storage_path_in_heartbeat(self):
+        old_requests = sys.modules.get("requests")
+        old_webview = sys.modules.get("webview")
+        old_argv = sys.argv[:]
+        heartbeat_payloads = []
+
+        def fake_post(url, json=None, timeout=10):
+            if url.endswith("/heartbeat"):
+                heartbeat_payloads.append(json)
+            return types.SimpleNamespace(status_code=200)
+
+        try:
+            sys.argv = ["client.py"]
+            sys.modules["requests"] = types.SimpleNamespace(post=fake_post, get=lambda *args, **kwargs: None)
+            sys.modules["webview"] = None
+            sys.modules.pop("client", None)
+            client_module = importlib.import_module("client")
+            with tempfile.TemporaryDirectory() as tmp:
+                blocker = Path(tmp) / "not-a-dir"
+                blocker.write_text("block mkdir", encoding="utf-8")
+                bad_storage_dir = blocker / "child"
+                client_module.load_client_config = lambda: {
+                    "server_url": "http://example.com",
+                    "parent_invite": "",
+                    "heartbeat_interval": 60,
+                    "reconnect_interval": 1,
+                    "storage_dir": str(bad_storage_dir),
+                    "manage_port": 8787,
+                }
+                client_module.wait_for_registration = lambda *args, **kwargs: True
+                client_module.get_device_mac = lambda: "12345"
+                client_module.random.uniform = lambda *args, **kwargs: 1.0
+                client_module.time.sleep = lambda seconds: (_ for _ in ()).throw(KeyboardInterrupt())
+
+                with self.assertRaises(KeyboardInterrupt):
+                    client_module.client_run()
+
+            self.assertEqual(len(heartbeat_payloads), 1)
+            self.assertEqual(heartbeat_payloads[0]["storage_status"], "unavailable")
+            self.assertIn("storage_error", heartbeat_payloads[0])
+        finally:
+            sys.argv = old_argv
             sys.modules.pop("client", None)
             if old_requests is None:
                 sys.modules.pop("requests", None)

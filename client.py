@@ -7,6 +7,7 @@ import random
 import requests
 import sys
 import shutil
+import tempfile
 from pathlib import Path
 import os
 import json
@@ -111,21 +112,33 @@ def get_directory_size_bytes(path):
 
 def inspect_storage_dir(storage_dir):
     if not storage_dir:
+        storage_used_gb = get_local_disk_use("")
         return {
             "storage_path": "",
             "storage_status": "unavailable",
             "storage_error": "未指定存储目录",
             "storage_total_gb": 0,
-            "storage_used_gb": 0,
+            "storage_used_gb": storage_used_gb,
             "storage_free_gb": 0,
         }
     try:
         path = ensure_storage_dir(storage_dir)
         if path is None or not path.is_dir():
             raise RuntimeError("存储路径不是目录")
-        probe = path / ".filezall_write_probe"
-        probe.write_text("ok", encoding="utf-8")
-        probe.unlink(missing_ok=True)
+        probe_path = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                prefix=".filezall_write_probe_",
+                dir=path,
+                delete=False,
+            ) as probe:
+                probe_path = Path(probe.name)
+                probe.write("ok")
+        finally:
+            if probe_path is not None:
+                probe_path.unlink(missing_ok=True)
         usage = shutil.disk_usage(path)
         dir_used = get_directory_size_bytes(path)
         return {
@@ -214,7 +227,6 @@ def client_run():
     NODE_STORAGE_DIR = get_storage_dir_arg() or config["storage_dir"]
     MANAGE_PORT = get_manage_port_arg() or int(config["manage_port"])
     if NODE_STORAGE_DIR:
-        ensure_storage_dir(NODE_STORAGE_DIR)
         safe_print(f"📁 节点存储目录：{Path(NODE_STORAGE_DIR).expanduser()}")
     device_mac = get_device_mac()
     # 根据设备MAC生成唯一用户标识
