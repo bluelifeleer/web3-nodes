@@ -350,8 +350,9 @@ CLIENT_MANAGE_HTML = """
       const data = payload.data || {};
       const storage = data.storage || {};
       const isRunning = !!data.running;
+      const heartbeatOk = !!data.heartbeat_ok;
       document.getElementById("runningState").textContent = isRunning ? "运行中" : "已停止";
-      document.getElementById("serverUrl").textContent = data.server_url ? "本地代理已配置" : "-";
+      document.getElementById("serverUrl").textContent = data.server_configured ? (heartbeatOk ? "连接正常" : "等待心跳") : "-";
       document.getElementById("lastHeartbeat").textContent = data.last_heartbeat || "-";
       document.getElementById("lastMessage").textContent = data.last_notice || data.last_error || "-";
       document.getElementById("storageState").textContent = storage.storage_status || "-";
@@ -361,7 +362,7 @@ CLIENT_MANAGE_HTML = """
       document.getElementById("storagePath").textContent = storage.storage_path || data.storage_dir || "-";
       document.getElementById("storageDirInput").value = data.storage_dir || "";
       const pill = document.getElementById("controlState");
-      pill.textContent = isRunning ? "运行中" : "已停止";
+      pill.textContent = isRunning ? (heartbeatOk ? "运行中" : "重连中") : "已停止";
       pill.className = "status-pill" + (isRunning ? "" : " offline");
       document.getElementById("stopButton").disabled = !isRunning;
     };
@@ -640,6 +641,7 @@ def create_client_state(server_url, user_addr, node_mac, storage_dir, manage_por
         "manage_port": manage_port,
         "csrf_token": secrets.token_urlsafe(24),
         "running": True,
+        "heartbeat_ok": False,
         "shutdown_requested": False,
         "last_heartbeat": "",
         "last_error": "",
@@ -650,10 +652,9 @@ def create_client_state(server_url, user_addr, node_mac, storage_dir, manage_por
 
 def client_status_payload(state):
     return {
-        "server_url": state["server_url"],
-        "user_addr": state["user_addr"],
-        "node_mac": state["node_mac"],
         "running": state["running"],
+        "heartbeat_ok": state.get("heartbeat_ok", False),
+        "server_configured": bool(state.get("server_url")),
         "shutdown_requested": state.get("shutdown_requested", False),
         "last_heartbeat": state["last_heartbeat"],
         "last_error": state["last_error"],
@@ -784,13 +785,13 @@ def report_heartbeat(state, upload_bw, post_func=requests.post):
     try:
         response = post_func(f"{state['server_url']}/heartbeat", json=payload, timeout=10)
         ensure_success_response(response)
-        state["running"] = True
+        state["heartbeat_ok"] = True
         state["last_notice"] = ""
         state["last_heartbeat"] = time.strftime("%Y-%m-%d %H:%M:%S")
         state["last_error"] = ""
         return True, payload
     except Exception as exc:
-        state["running"] = False
+        state["heartbeat_ok"] = False
         state["last_error"] = str(exc)
         return False, payload
 

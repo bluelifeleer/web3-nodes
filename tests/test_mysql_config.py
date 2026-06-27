@@ -1790,19 +1790,51 @@ class MysqlConfigTest(unittest.TestCase):
                 self.assertEqual(bad_type_error.exception.code, 400)
                 bad_type_error.exception.read()
                 bad_type_error.exception.close()
+
+                def failing_get(url, params=None, timeout=10):
+                    get_calls.append((url, params, timeout))
+                    return FakeResponse({"code": 400, "msg": "节点身份校验失败"}, status_code=400)
+
+                def failing_post(url, json=None, timeout=10):
+                    post_calls.append((url, json, timeout))
+                    return FakeResponse({"code": 400, "msg": "可提现余额不足"}, status_code=400)
+
+                client_module.requests = types.SimpleNamespace(get=failing_get, post=failing_post)
+                with self.assertRaises(urllib.error.HTTPError) as earnings_error:
+                    urllib.request.urlopen(f"{base_url}/api/earnings", timeout=5)
+                self.assertEqual(earnings_error.exception.code, 400)
+                earnings_body = json.loads(earnings_error.exception.read().decode("utf-8"))
+                earnings_error.exception.close()
+                self.assertFalse(earnings_body["ok"])
+                self.assertEqual(earnings_body["error"], "节点身份校验失败")
+
+                failing_withdrawal = urllib.request.Request(
+                    f"{base_url}/api/withdrawals",
+                    data=json.dumps({"amount": "999", "wallet_address": "0xabc"}).encode("utf-8"),
+                    headers={"Content-Type": "application/json", "X-CSRF-Token": state["csrf_token"]},
+                    method="POST",
+                )
+                with self.assertRaises(urllib.error.HTTPError) as withdrawal_error:
+                    urllib.request.urlopen(failing_withdrawal, timeout=5)
+                self.assertEqual(withdrawal_error.exception.code, 400)
+                withdrawal_body = json.loads(withdrawal_error.exception.read().decode("utf-8"))
+                withdrawal_error.exception.close()
+                self.assertFalse(withdrawal_body["ok"])
+                self.assertEqual(withdrawal_body["error"], "可提现余额不足")
             finally:
                 server.shutdown()
                 server.server_close()
                 thread.join(timeout=5)
 
             self.assertEqual(
-                get_calls,
+                get_calls[:2],
                 [
                     ("http://server.example/api/node/earnings", {"user_addr": "NODE_A", "node_mac": "MAC_A"}, 10),
                     ("http://server.example/api/node/withdrawals", {"user_addr": "NODE_A", "node_mac": "MAC_A"}, 10),
                 ],
             )
-            self.assertEqual(len(post_calls), 1)
+            self.assertEqual(len(get_calls), 3)
+            self.assertEqual(len(post_calls), 2)
             self.assertEqual(post_calls[0][0], "http://server.example/api/node/withdrawals")
             self.assertEqual(
                 post_calls[0][1],
@@ -1965,7 +1997,8 @@ class MysqlConfigTest(unittest.TestCase):
 
             self.assertFalse(ok)
             self.assertEqual(payload["disk_used"], 20)
-            self.assertFalse(state["running"])
+            self.assertTrue(state["running"])
+            self.assertFalse(state["heartbeat_ok"])
             self.assertEqual(state["last_heartbeat"], "")
             self.assertIn("500", state["last_error"])
         finally:
@@ -2017,6 +2050,10 @@ class MysqlConfigTest(unittest.TestCase):
 
                 with urllib.request.urlopen(f"{base_url}/api/status?x=1", timeout=5) as response:
                     status_payload = json.loads(response.read().decode("utf-8"))
+                self.assertTrue(status_payload["data"]["server_configured"])
+                self.assertNotIn("server_url", status_payload["data"])
+                self.assertNotIn("user_addr", status_payload["data"])
+                self.assertNotIn("node_mac", status_payload["data"])
                 self.assertEqual(status_payload["data"]["storage"]["storage_total_gb"], 100)
                 self.assertEqual(status_payload["data"]["storage"]["storage_free_gb"], 80)
 
