@@ -1082,10 +1082,24 @@ def open_map_window():
     if webview is None:
         safe_print("ℹ️ 未安装 pywebview，跳过地图窗口")
         return
-    html = '''
+    amap_web_key = os.getenv("AMAP_WEB_KEY", "").strip()
+    amap_security_jscode = os.getenv("AMAP_SECURITY_JSCODE", "").strip()
+    if not amap_web_key or not amap_security_jscode:
+        html = '''
+    <html style="margin:0;padding:0">
+    <body style="margin:0;padding:24px;font-family:Arial,'Microsoft YaHei',sans-serif;background:#f8fafc;color:#155e63">
+    <h2>地图未启用</h2>
+    <p>未完整配置 AMAP_WEB_KEY / AMAP_SECURITY_JSCODE，客户端已跳过高德地图 SDK 加载。</p>
+    <p>节点仍会继续运行，后台可使用节点分布看板查看数据。</p>
+    </body>
+    </html>
+    '''
+    else:
+        html = '''
     <html style="margin:0;padding:0">
     <body style="margin:0;padding:0">
-    <script src="https://webapi.amap.com/maps?v=2.0&key=72c8873c3ca27f35e4815ec41e6fae24"></script>
+    <script>window._AMapSecurityConfig = { securityJsCode: __AMAP_SECURITY_JSCODE__ };</script>
+    <script src="https://webapi.amap.com/maps?v=2.0&key=__AMAP_WEB_KEY__"></script>
     <div id="map" style="width:100vw;height:100vh"></div>
     <script>
     let map = new AMap.Map('map',{zoom:4,center:[105,35]});
@@ -1104,14 +1118,21 @@ def open_map_window():
     </body>
     </html>
     '''
+        html = html.replace("__AMAP_SECURITY_JSCODE__", json.dumps(amap_security_jscode))
+        html = html.replace("__AMAP_WEB_KEY__", amap_web_key)
     webview.create_window("节点全球地图", html=html, width=800, height=600)
     webview.start(gui=True, debug=False)
+
+def should_open_map_window():
+    return webview is not None and os.getenv("NODE_OPEN_MAP_WINDOW", "").strip().lower() in ("1", "true", "yes", "on")
 
 if __name__ == "__main__":
     import threading
     safe_print("🚀 Web3分布式存储激励节点启动成功")
-    if webview is None:
-        client_run()
-    else:
+    if should_open_map_window():
         threading.Thread(target=client_run,daemon=True).start()
         open_map_window()
+    else:
+        if webview is not None:
+            safe_print("ℹ️ 默认不自动打开 pywebview 地图窗口；如需地图请设置 NODE_OPEN_MAP_WINDOW=1")
+        client_run()

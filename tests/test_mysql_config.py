@@ -34,6 +34,8 @@ ENV_KEYS = (
     "DB_NAME",
     "WEB3_NODES_SKIP_DOTENV",
     "AMAP_WEB_KEY",
+    "AMAP_SECURITY_JSCODE",
+    "NODE_OPEN_MAP_WINDOW",
 )
 
 
@@ -1320,7 +1322,7 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertIn("renderMapFallback", body)
         self.assertIn('id="nodeDistributionFallback"', body)
 
-    def test_admin_page_loads_amap_only_when_key_is_configured(self):
+    def test_admin_page_does_not_load_amap_when_security_jscode_is_missing(self):
         server_main = load_server_main(ADMIN_API_TOKEN="secret-token", AMAP_WEB_KEY="valid-map-key")
         server_main.init_db = lambda: self.fail("admin dashboard shell should not require database")
 
@@ -1328,6 +1330,24 @@ class MysqlConfigTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         body = response.get_data(as_text=True)
+        self.assertNotIn("webapi.amap.com/maps?v=2.0&key=valid-map-key", body)
+        self.assertIn("AMAP_SECURITY_JSCODE", body)
+        self.assertIn("renderMapFallback", body)
+
+    def test_admin_page_loads_amap_with_security_jscode_when_configured(self):
+        server_main = load_server_main(
+            ADMIN_API_TOKEN="secret-token",
+            AMAP_WEB_KEY="valid-map-key",
+            AMAP_SECURITY_JSCODE="valid-security-code",
+        )
+        server_main.init_db = lambda: self.fail("admin dashboard shell should not require database")
+
+        response = server_main.app.test_client().get("/admin")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("window._AMapSecurityConfig", body)
+        self.assertIn('"valid-security-code"', body)
         self.assertIn("webapi.amap.com/maps?v=2.0&key=valid-map-key", body)
 
     def test_main_pages_share_modern_commercial_shell(self):
@@ -2599,6 +2619,75 @@ class MysqlConfigTest(unittest.TestCase):
             self.assertEqual(result["storage_error"], "未指定存储目录")
             self.assertEqual(result["storage_used_gb"], 12.34)
         finally:
+            sys.modules.pop("client", None)
+            if old_requests is None:
+                sys.modules.pop("requests", None)
+            else:
+                sys.modules["requests"] = old_requests
+            if old_webview is None:
+                sys.modules.pop("webview", None)
+            else:
+                sys.modules["webview"] = old_webview
+
+    def test_client_does_not_auto_open_pywebview_map_by_default(self):
+        old_requests = sys.modules.get("requests")
+        old_webview = sys.modules.get("webview")
+        old_env = {key: os.environ.get(key) for key in ("NODE_OPEN_MAP_WINDOW", "AMAP_WEB_KEY", "AMAP_SECURITY_JSCODE")}
+        try:
+            for key in old_env:
+                os.environ.pop(key, None)
+            sys.modules["requests"] = types.SimpleNamespace(post=lambda *args, **kwargs: None, get=lambda *args, **kwargs: None)
+            sys.modules["webview"] = types.SimpleNamespace(
+                create_window=lambda *args, **kwargs: None,
+                start=lambda *args, **kwargs: None,
+            )
+            sys.modules.pop("client", None)
+            client_module = importlib.import_module("client")
+
+            self.assertFalse(client_module.should_open_map_window())
+        finally:
+            for key, value in old_env.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+            sys.modules.pop("client", None)
+            if old_requests is None:
+                sys.modules.pop("requests", None)
+            else:
+                sys.modules["requests"] = old_requests
+            if old_webview is None:
+                sys.modules.pop("webview", None)
+            else:
+                sys.modules["webview"] = old_webview
+
+    def test_client_map_window_requires_amap_security_config(self):
+        old_requests = sys.modules.get("requests")
+        old_webview = sys.modules.get("webview")
+        old_env = {key: os.environ.get(key) for key in ("AMAP_WEB_KEY", "AMAP_SECURITY_JSCODE")}
+        windows = []
+        try:
+            for key in old_env:
+                os.environ.pop(key, None)
+            sys.modules["requests"] = types.SimpleNamespace(post=lambda *args, **kwargs: None, get=lambda *args, **kwargs: None)
+            sys.modules["webview"] = types.SimpleNamespace(
+                create_window=lambda title, html="", **kwargs: windows.append((title, html, kwargs)),
+                start=lambda *args, **kwargs: None,
+            )
+            sys.modules.pop("client", None)
+            client_module = importlib.import_module("client")
+
+            client_module.open_map_window()
+
+            self.assertTrue(windows)
+            self.assertNotIn("webapi.amap.com/maps?v=2.0&key=", windows[-1][1])
+            self.assertIn("地图未启用", windows[-1][1])
+        finally:
+            for key, value in old_env.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
             sys.modules.pop("client", None)
             if old_requests is None:
                 sys.modules.pop("requests", None)

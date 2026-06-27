@@ -110,6 +110,7 @@ ADMIN_API_TOKEN = os.getenv("ADMIN_API_TOKEN", "")
 SESSION_SECRET = os.getenv("SESSION_SECRET")
 MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_MB", "100")) * 1024 * 1024
 AMAP_WEB_KEY = os.getenv("AMAP_WEB_KEY", "").strip()
+AMAP_SECURITY_JSCODE = os.getenv("AMAP_SECURITY_JSCODE", "").strip()
 app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_BYTES
 db = None
 cursor = None
@@ -1834,7 +1835,10 @@ ADMIN_HTML = '''
         .admin-status-bar a{color:#2563eb;text-decoration:none;margin-left:auto;}
         .token-status{color:#8c6d1f;font-size:14px;}
     </style>
-    {% if amap_web_key %}
+    {% if amap_web_key and amap_security_jscode %}
+    <script type="text/javascript">
+        window._AMapSecurityConfig = { securityJsCode: {{ amap_security_jscode|tojson }} };
+    </script>
     <script type="text/javascript" src="https://webapi.amap.com/maps?v=2.0&key={{ amap_web_key }}"></script>
     {% endif %}
 </head>
@@ -1890,7 +1894,7 @@ ADMIN_HTML = '''
 
     <div class="box commercial-card" style="min-height:600px;">
         <h3>🌍 全网节点全球地理分布地图</h3>
-        <p style="color:#64748b;font-size:14px;margin-bottom:15px;">实时在线节点打点｜离线节点灰色显示｜未配置 AMAP_WEB_KEY 时自动切换为节点分布看板</p>
+        <p style="color:#64748b;font-size:14px;margin-bottom:15px;">实时在线节点打点｜离线节点灰色显示｜未配置 AMAP_WEB_KEY 或 AMAP_SECURITY_JSCODE 时自动切换为节点分布看板</p>
         <div id="map" style="width:100%;height:500px;border-radius:8px;"></div>
         <div id="nodeDistributionFallback" class="commercial-card" style="display:none;margin-top:12px;padding:14px;background:#f8fafc;"></div>
     </div>
@@ -2313,7 +2317,7 @@ function renderMapFallback(message){
 
 function initMap(){
     if(!AMAP_WEB_KEY){
-        renderMapFallback("未配置 AMAP_WEB_KEY，已关闭高德地图加载以避免 INVALID_USER_KEY。");
+        renderMapFallback("未完整配置 AMAP_WEB_KEY / AMAP_SECURITY_JSCODE，已关闭高德地图加载以避免 INVALID_USER_KEY 或 INVALID_USER_SCODE。");
         if(getAdminToken()){ loadNodeMap(); }
         return;
     }
@@ -3143,7 +3147,11 @@ def home_page():
 
 @app.route("/admin")
 def admin_index():
-    return render_template_string(ADMIN_HTML, amap_web_key=AMAP_WEB_KEY)
+    return render_template_string(
+        ADMIN_HTML,
+        amap_web_key=AMAP_WEB_KEY if AMAP_WEB_KEY and AMAP_SECURITY_JSCODE else "",
+        amap_security_jscode=AMAP_SECURITY_JSCODE if AMAP_WEB_KEY and AMAP_SECURITY_JSCODE else "",
+    )
 
 
 @app.route("/admin/login")

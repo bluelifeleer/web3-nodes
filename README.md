@@ -77,7 +77,7 @@ MAX_UPLOAD_MB=100
 - `ADMIN_API_TOKEN` 用于后台登录。
 - `SESSION_SECRET` 用于用户登录 Token。
 - `AES_KEY` 当前代码使用 AES，需要 16 字节字符串；自动生成时会生成可用长度。
-- `AMAP_WEB_KEY` 可选，用于后台节点地图；不配置时后台会自动降级为节点分布看板，避免地图 SDK 报 `INVALID_USER_KEY`。
+- `AMAP_WEB_KEY` 和 `AMAP_SECURITY_JSCODE` 可选，用于后台节点地图；两者缺一时后台会自动降级为节点分布看板，避免地图 SDK 报 `INVALID_USER_KEY` / `INVALID_USER_SCODE`。
 - 不要提交真实 `.env`，仓库已忽略 `.env`。
 
 ## 3. 数据库初始化
@@ -425,6 +425,7 @@ http://127.0.0.1:8787
 - `/api/storage` 更新目录后会立即重新检测，并把新的目录状态用于后续容量上报。
 - `停止节点` 会把客户端切换为停止状态，后续心跳循环会结束；默认不会直接强杀当前 Python 进程。
 - `重启节点` 当前只返回“开发模式暂不支持自动重启，请手动重新运行 client.py”，避免误触发危险的进程替换。
+- 客户端默认不再自动打开 pywebview 地图窗口，避免 Windows WebView 临时数据目录被占用时出现清理警告；确实需要地图窗口时，先配置 `AMAP_WEB_KEY`、`AMAP_SECURITY_JSCODE`，再设置 `$env:NODE_OPEN_MAP_WINDOW="1"` 后启动客户端。
 
 正常输出类似：
 
