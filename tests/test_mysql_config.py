@@ -1054,6 +1054,7 @@ class MysqlConfigTest(unittest.TestCase):
 
         self.assertEqual(old_response.status_code, 200)
         self.assertEqual(new_response.status_code, 200)
+        self.assertEqual(executed[0][1][2:8], ("", "unknown", "", 0.0, 2.5, 0.0))
         self.assertTrue(any("storage_total_gb" in sql for sql, _ in executed))
         self.assertIn("D:/web3-node-data", executed[-1][1])
 
@@ -1461,14 +1462,9 @@ class MysqlConfigTest(unittest.TestCase):
 
             def fetchall(self):
                 return [(
-                    1,
                     "NODE_A",
-                    "MAC_A",
-                    100,
                     10,
                     30,
-                    2,
-                    server_main.datetime.now(),
                 )]
 
             def fetchone(self):
@@ -1481,6 +1477,11 @@ class MysqlConfigTest(unittest.TestCase):
         server_main.cursor = FakeCursor()
 
         self.assertTrue(server_main.auto_settle_reward())
+        node_select_sql = [sql for sql, _ in executed if "from node_power" in sql.lower()][0]
+        self.assertNotIn("select *", node_select_sql.lower())
+        self.assertIn("user_address", node_select_sql)
+        self.assertIn("disk_used", node_select_sql)
+        self.assertIn("online_duration", node_select_sql)
         reward_sql = [sql for sql, _ in executed if "insert into node_reward" in sql.lower()]
         self.assertTrue(reward_sql)
         self.assertTrue(all("settle_date" in sql for sql in reward_sql))

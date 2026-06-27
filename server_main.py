@@ -1276,14 +1276,14 @@ def node_heartbeat():
 
 # 3. 每日自动分账函数
 def auto_settle_reward():
-    current_cursor().execute("select * from node_power where online_duration > %s",(ONLINE_VALID_MIN,))
+    current_cursor().execute("select user_address,disk_used,online_duration from node_power where online_duration > %s",(ONLINE_VALID_MIN,))
     node_list = current_cursor().fetchall()
     settle_date = datetime.now().date()
 
     for node in node_list:
-        user_addr = node[1]
-        disk_contrib = node[4]
-        online_contrib = node[5]
+        user_addr = node[0]
+        disk_contrib = node[1]
+        online_contrib = node[2]
         # 贡献值计算公式
         total_contrib = disk_contrib * 10 + online_contrib * 0.5
         total_reward = round(total_contrib * 0.01,4)
