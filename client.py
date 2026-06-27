@@ -20,6 +20,7 @@ SERVER_URL = "http://127.0.0.1:8000"
 PARENT_INVITE = ""
 HEARTBEAT_INTERVAL = 60
 RECONNECT_INTERVAL = 10
+NODE_STORAGE_DIR = ""
 
 
 def safe_print(message):
@@ -35,6 +36,7 @@ def load_client_config(config_path="node_config.json"):
         "parent_invite": PARENT_INVITE,
         "heartbeat_interval": HEARTBEAT_INTERVAL,
         "reconnect_interval": RECONNECT_INTERVAL,
+        "storage_dir": NODE_STORAGE_DIR,
     }
     path = Path(config_path)
     if path.exists():
@@ -48,6 +50,7 @@ def load_client_config(config_path="node_config.json"):
     config["parent_invite"] = os.getenv("NODE_PARENT_INVITE", config["parent_invite"])
     config["heartbeat_interval"] = int(os.getenv("NODE_HEARTBEAT_INTERVAL", config["heartbeat_interval"]))
     config["reconnect_interval"] = int(os.getenv("NODE_RECONNECT_INTERVAL", config["reconnect_interval"]))
+    config["storage_dir"] = os.getenv("NODE_STORAGE_DIR", config["storage_dir"])
     return config
 
 
@@ -64,12 +67,49 @@ def get_invite_arg():
         return exe_name.split(marker, 1)[1].strip()
     return ""
 
+
+def get_storage_dir_arg():
+    for arg in sys.argv[1:]:
+        if arg.startswith("storage_dir="):
+            return arg.split("=", 1)[1].strip()
+        if arg.startswith("--storage-dir="):
+            return arg.split("=", 1)[1].strip()
+        if arg.startswith("--storage_dir="):
+            return arg.split("=", 1)[1].strip()
+    return ""
+
+
+def ensure_storage_dir(storage_dir):
+    if not storage_dir:
+        return None
+    path = Path(storage_dir).expanduser()
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def get_directory_size_bytes(path):
+    total = 0
+    for file_path in path.rglob("*"):
+        try:
+            if file_path.is_file():
+                total += file_path.stat().st_size
+        except OSError:
+            continue
+    return total
+
 # 生成唯一设备指纹（防多开、防作弊）
 def get_device_mac():
     return str(uuid.getnode())
 
 # 读取本地IPFS真实存储占用
-def get_local_disk_use():
+def get_local_disk_use(storage_dir=""):
+    if storage_dir:
+        try:
+            path = ensure_storage_dir(storage_dir)
+            if path is not None:
+                return round(get_directory_size_bytes(path) / (1024 ** 3), 2)
+        except Exception:
+            return 0.0
     try:
         # 调用本地IPFS命令，读取仓库占用空间
         res = subprocess.check_output("ipfs stats repo --human",shell=True).decode()
@@ -116,12 +156,16 @@ def wait_for_registration(
 
 # 节点核心运行逻辑
 def client_run():
-    global SERVER_URL, PARENT_INVITE, HEARTBEAT_INTERVAL
+    global SERVER_URL, PARENT_INVITE, HEARTBEAT_INTERVAL, NODE_STORAGE_DIR
     config = load_client_config()
     SERVER_URL = config["server_url"]
     PARENT_INVITE = get_invite_arg() or config["parent_invite"]
     HEARTBEAT_INTERVAL = int(config["heartbeat_interval"])
     reconnect_interval = int(config["reconnect_interval"])
+    NODE_STORAGE_DIR = get_storage_dir_arg() or config["storage_dir"]
+    if NODE_STORAGE_DIR:
+        ensure_storage_dir(NODE_STORAGE_DIR)
+        safe_print(f"📁 节点存储目录：{Path(NODE_STORAGE_DIR).expanduser()}")
     device_mac = get_device_mac()
     # 根据设备MAC生成唯一用户标识
     user_addr = "NODE_" + hashlib.md5(device_mac.encode()).hexdigest()[:12]
@@ -138,7 +182,7 @@ def client_run():
     # 2. 循环心跳上报（60秒一次）
     safe_print("🔄 节点持续运行中，实时上报存储数据...")
     while True:
-        disk_use = get_local_disk_use()
+        disk_use = get_local_disk_use(NODE_STORAGE_DIR)
         upload_bw = round(random.uniform(0.2,3.0),2)
         try:
             requests.post(f"{SERVER_URL}/heartbeat",json={
@@ -171,7 +215,7 @@ def open_map_window():
     html = '''
     <html style="margin:0;padding:0">
     <body style="margin:0;padding:0">
-    <script src="https://webapi.amap.com/maps?v=2.0&key=6f17f9896974a8686929496921212479"></script>
+    <script src="https://webapi.amap.com/maps?v=2.0&key=72c8873c3ca27f35e4815ec41e6fae24"></script>
     <div id="map" style="width:100vw;height:100vh"></div>
     <script>
     let map = new AMap.Map('map',{zoom:4,center:[105,35]});

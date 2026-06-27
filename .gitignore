@@ -1,6 +1,7 @@
 .env
 node_config.json
 chunk_tmp/
+node_storage/
 dist/
 build/
 *.spec

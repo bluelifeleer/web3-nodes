@@ -117,6 +117,20 @@ ipfs stats repo --human
 
 如果能输出仓库大小，说明本地 IPFS 可用。
 
+如果 `ipfs daemon` 出现类似下面的 mDNS 警告：
+
+```text
+mdns: Failed to set multicast interface: setsockopt: An invalid argument was supplied.
+```
+
+通常是 Windows 某个网络适配器不支持组播接口导致的局域网发现警告。只要 `ipfs stats repo --human` 和 API 端口可用，上传备份一般不受影响。如果希望关闭这个提示，可以执行：
+
+```powershell
+ipfs config --json Discovery.MDNS.Enabled false
+```
+
+然后重启 `ipfs daemon`。
+
 ## 5. 启动服务端
 
 新开终端：
@@ -191,7 +205,7 @@ http://127.0.0.1:8000/admin
 - 查看积分流水
 - 审核用户提现申请
 
-后台页面会每 30 秒自动刷新节点、收益、文件、排行榜、邀请树、IPFS 状态和地图数据，同时保留手动刷新按钮。
+后台页面会每 10 秒自动刷新节点、收益、文件、排行榜、邀请树、IPFS 状态和地图数据，同时保留手动刷新按钮。
 
 后台管理上传仍走原后台 Token 流程：
 
@@ -350,7 +364,8 @@ copy node_config.example.json node_config.json
   "server_url": "http://127.0.0.1:8000",
   "parent_invite": "",
   "heartbeat_interval": 60,
-  "reconnect_interval": 10
+  "reconnect_interval": 10,
+  "storage_dir": "./node_storage/client"
 }
 ```
 
@@ -359,6 +374,29 @@ copy node_config.example.json node_config.json
 ```powershell
 python client.py
 ```
+
+如需让客户节点使用指定存储目录，可以三选一：
+
+```powershell
+python client.py --storage-dir=D:\web3-node-data
+```
+
+或写入 `node_config.json`：
+
+```json
+{
+  "storage_dir": "D:/web3-node-data"
+}
+```
+
+或使用环境变量：
+
+```powershell
+$env:NODE_STORAGE_DIR="D:\web3-node-data"
+python client.py
+```
+
+配置后客户端会自动创建目录，并按该目录实际占用上报存储数据；未配置时仍兼容原来的本地 IPFS repo 占用统计。
 
 正常输出类似：
 
@@ -402,6 +440,7 @@ $env:NODE_SERVER_URL="http://127.0.0.1:8000"
 $env:NODE_PARENT_INVITE="你的邀请码"
 $env:NODE_HEARTBEAT_INTERVAL="60"
 $env:NODE_RECONNECT_INTERVAL="10"
+$env:NODE_STORAGE_DIR="D:\web3-node-data"
 python client.py
 ```
 

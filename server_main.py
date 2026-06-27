@@ -628,6 +628,7 @@ SHARD_SIZE = 1024 * 1024  # 1MB 分片
 # 临时分片存储目录
 CHUNK_TMP_DIR = "./chunk_tmp"
 os.makedirs(CHUNK_TMP_DIR, exist_ok=True)
+NODE_STORAGE_DIR = os.getenv("NODE_STORAGE_DIR", "./node_storage")
 SAFE_FILE_HASH_RE = re.compile(r"^[a-fA-F0-9]{64}$")
 
 # 分片大小 1MB
@@ -679,6 +680,66 @@ def normalize_visibility(value):
 
 def create_access_token(visibility):
     return secrets.token_urlsafe(24) if normalize_visibility(visibility) == "private" else ""
+
+
+def normalize_storage_node_name(node):
+    raw = str(node or "").strip()
+    if not raw:
+        return ""
+    if re.fullmatch(r"[A-Za-z0-9_.-]{1,96}", raw):
+        return raw
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
+
+
+def storage_node_file_path(file_hash, node):
+    if not validate_file_hash(file_hash):
+        return None
+    node_name = normalize_storage_node_name(node)
+    if not node_name:
+        return None
+    base_dir = Path(NODE_STORAGE_DIR).resolve()
+    node_dir = (base_dir / node_name / file_hash[:2]).resolve()
+    if base_dir != node_dir and base_dir not in node_dir.parents:
+        return None
+    return node_dir / f"{file_hash}.bin"
+
+
+def persist_file_to_storage_nodes(file_hash, encrypted_data, nodes):
+    stored_nodes = []
+    for node in nodes:
+        target = storage_node_file_path(file_hash, node)
+        if target is None:
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(encrypted_data)
+        stored_nodes.append(node)
+    if not stored_nodes:
+        raise RuntimeError("暂无可用用户节点")
+    return stored_nodes
+
+
+def read_file_from_storage_nodes(file_hash, nodes):
+    for node in nodes:
+        target = storage_node_file_path(file_hash, node)
+        if target is not None and target.exists():
+            return target.read_bytes()
+    return None
+
+
+def backup_to_ipfs(encrypted_data):
+    try:
+        client = get_ipfs_client()
+        try:
+            return client.add_bytes(encrypted_data), "ok", ""
+        finally:
+            if hasattr(client, "close"):
+                client.close()
+    except Exception as exc:
+        return "", "failed", str(exc)
+
+
+def real_user_storage_nodes(nodes):
+    return [node for node in nodes if node and node != "SERVER_BACKUP_NODE"]
 
 
 def parse_stored_nodes(value):
@@ -1684,7 +1745,7 @@ ADMIN_HTML = '''
     </div>
 <script>
 const AMAP_WEB_KEY = "{{ amap_web_key }}";
-const ADMIN_REFRESH_INTERVAL_MS = 30000;
+const ADMIN_REFRESH_INTERVAL_MS = 10000;
 let adminRefreshTimer = null;
 
 function getAdminToken(){
@@ -2035,7 +2096,7 @@ function startAdminAutoRefresh(){
 }
 
 // 自动加载数据
-window.onload = function(){
+document.addEventListener("DOMContentLoaded", () => {
     if(!requireAdminLogin()){ return; }
     setAdminTokenStatus("登录态已读取，正在加载后台数据", false);
     initMap();
@@ -2043,7 +2104,7 @@ window.onload = function(){
         refreshAdminData();
         startAdminAutoRefresh();
     }
-}
+});
 </script>
 </body>
 </html>
@@ -2131,11 +2192,16 @@ USER_UPLOAD_HTML = '''
     const resultBox = document.getElementById("resultBox");
     const fileHashInput = document.getElementById("fileHashInput");
     const shareLinkBox = document.getElementById("shareLinkBox");
+    function redirectToLogin(){
+        const loginUrl = new URL("/user/login", window.location.origin);
+        loginUrl.searchParams.set("next", window.location.pathname + window.location.search);
+        window.location.href = loginUrl.toString();
+    }
     function requireUserLogin(){
         if(!token){
             notice.hidden = false;
             resultBox.textContent = "缺少 user_token，请先登录。";
-            window.location.href = "/user/login";
+            redirectToLogin();
             return false;
         }
         return true;
@@ -2232,7 +2298,7 @@ USER_LOGIN_HTML = '''
         .login-value p{color:#64748b;line-height:1.8;margin:0 0 16px;}
         .value-list{display:grid;gap:10px;margin-top:18px;}
         .value-list div{padding:12px;border-left:3px solid #20b486;background:#f8fafc;border-radius:7px;color:#35515a;}
-        .tabs{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:18px;background:linear-gradient(180deg,#eef6f6,#f8fafc);border:1px solid rgba(20,184,166,.18);border-radius:8px;padding:6px;}
+        .tabs{display:grid;grid-template-columns:repeat(auto-fit,minmax(82px,1fr));gap:8px;margin-bottom:18px;background:linear-gradient(180deg,#eef6f6,#f8fafc);border:1px solid rgba(20,184,166,.18);border-radius:8px;padding:6px;}
         .tab{background:rgba(255,255,255,.78)!important;color:#334155!important;border:1px solid rgba(15,118,110,.12)!important;margin:0;border-radius:7px!important;box-shadow:none!important;}
         .tab.active{background:linear-gradient(135deg,#0f766e,#14b8a6 48%,#f0b429)!important;color:white!important;box-shadow:0 12px 28px rgba(20,184,166,.24)!important;}
         .panel{background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:18px;}
@@ -2245,6 +2311,8 @@ USER_LOGIN_HTML = '''
         button.secondary{background:#4b5563;}
         .status{white-space:pre-wrap;background:#111827;color:#e5e7eb;border-radius:8px;padding:14px;margin-top:16px;min-height:54px;}
         .hint{color:#4b5563;font-size:14px;}
+        .provider-list{display:grid;gap:10px;}
+        .provider-note{padding:12px;border:1px dashed #99d8cf;border-radius:8px;background:#f0fdfa;color:#155e63;line-height:1.7;}
     </style>
 </head>
 <body class="commercial-page user-login-page">
@@ -2275,7 +2343,11 @@ USER_LOGIN_HTML = '''
         <div class="tabs" role="tablist" aria-label="登录方式">
             <button type="button" class="tab active" data-auth-tab="login">账号登录</button>
             <button type="button" class="tab" data-auth-tab="register">注册账号</button>
+            <button type="button" class="tab" data-auth-tab="phone">手机</button>
+            <button type="button" class="tab" data-auth-tab="email">邮箱</button>
             <button type="button" class="tab" data-auth-tab="wallet">钱包登录</button>
+            <button type="button" class="tab" data-auth-tab="wechat">微信</button>
+            <button type="button" class="tab" data-auth-tab="qq">QQ</button>
         </div>
         <section class="panel auth-panel active" id="loginPanel" data-auth-panel="login">
             <h2>账号登录</h2>
@@ -2301,6 +2373,31 @@ USER_LOGIN_HTML = '''
                 <button type="submit">注册并登录</button>
             </form>
         </section>
+        <section class="panel auth-panel" id="phonePanel" data-auth-panel="phone">
+            <h2>手机号登录</h2>
+            <form id="phoneLoginForm">
+                <label>手机号
+                    <input id="phoneLoginIdentifier" inputmode="tel" autocomplete="tel" placeholder="13800000000" required>
+                </label>
+                <label>密码
+                    <input id="phoneLoginPassword" type="password" autocomplete="current-password" required>
+                </label>
+                <button type="submit">手机登录</button>
+            </form>
+        </section>
+        <section class="panel auth-panel" id="emailPanel" data-auth-panel="email">
+            <h2>邮箱登录</h2>
+            <form id="emailLoginForm">
+                <label>邮箱
+                    <input id="emailLoginIdentifier" type="email" autocomplete="email" placeholder="name@163.com / gmail.com / outlook.com / icloud.com" required>
+                </label>
+                <label>密码
+                    <input id="emailLoginPassword" type="password" autocomplete="current-password" required>
+                </label>
+                <div class="hint">支持 163.com、gmail.com、outlook.com、icloud.com / Apple 邮箱账号作为登录名。</div>
+                <button type="submit">邮箱登录</button>
+            </form>
+        </section>
         <section class="panel auth-panel" id="walletPanel" data-auth-panel="wallet">
             <h2>钱包登录</h2>
             <form id="walletLoginForm">
@@ -2318,6 +2415,20 @@ USER_LOGIN_HTML = '''
                 <button type="submit">钱包登录</button>
             </form>
         </section>
+        <section class="panel auth-panel" id="wechatPanel" data-auth-panel="wechat">
+            <h2>微信登录</h2>
+            <div class="provider-list">
+                <div class="provider-note">微信开放平台接入位已预留。配置 AppID、AppSecret 和回调地址后即可启用扫码登录。</div>
+                <button type="button" class="secondary" onclick="showStatus('微信登录需要先接入微信开放平台配置。')">微信扫码登录</button>
+            </div>
+        </section>
+        <section class="panel auth-panel" id="qqPanel" data-auth-panel="qq">
+            <h2>QQ 登录</h2>
+            <div class="provider-list">
+                <div class="provider-note">QQ 互联接入位已预留。配置 APP ID、APP Key 和回调地址后即可启用授权登录。</div>
+                <button type="button" class="secondary" onclick="showStatus('QQ 登录需要先接入 QQ 互联配置。')">QQ 授权登录</button>
+            </div>
+        </section>
     </div>
     <pre id="statusBox" class="status">等待操作...</pre>
     </div>
@@ -2325,6 +2436,14 @@ USER_LOGIN_HTML = '''
     <script>
     const statusBox = document.getElementById("statusBox");
     function showStatus(message){ statusBox.textContent = message; }
+    function redirectAfterLogin(){
+        const params = new URLSearchParams(window.location.search);
+        const next = params.get("next") || "/user/dashboard";
+        if(next.startsWith("/") && !next.startsWith("//")){
+            return next;
+        }
+        return "/user/dashboard";
+    }
     function switchAuthTab(nextTab){
         document.querySelectorAll("[data-auth-tab]").forEach((button) => {
             button.classList.toggle("active", button.dataset.authTab === nextTab);
@@ -2336,11 +2455,14 @@ USER_LOGIN_HTML = '''
     document.querySelectorAll("[data-auth-tab]").forEach((button) => {
         button.addEventListener("click", () => switchAuthTab(button.dataset.authTab));
     });
-    function saveSession(payload){
+    function saveSession(payload, shouldRedirect){
         const token = payload.token || payload.user_token || "";
         if(!token){ throw new Error(payload.msg || "接口未返回 user_token"); }
         localStorage.setItem("user_token", token);
         showStatus(`登录成功\\nuser_token 已保存\\n用户：${((payload.user || {}).username) || ""}`);
+        if(shouldRedirect){
+            window.location.href = redirectAfterLogin();
+        }
     }
     async function postJson(url, body){
         const response = await fetch(url, {
@@ -2359,7 +2481,7 @@ USER_LOGIN_HTML = '''
                 username: document.getElementById("registerUsername").value.trim(),
                 password: document.getElementById("registerPassword").value
             });
-            saveSession(payload);
+            saveSession(payload, true);
         }catch(error){ showStatus(`注册失败\\n${error.message}`); }
     });
     document.getElementById("passwordLoginForm").addEventListener("submit", async (event) => {
@@ -2369,8 +2491,33 @@ USER_LOGIN_HTML = '''
                 username: document.getElementById("loginUsername").value.trim(),
                 password: document.getElementById("loginPassword").value
             });
-            saveSession(payload);
+            saveSession(payload, true);
         }catch(error){ showStatus(`登录失败\\n${error.message}`); }
+    });
+    async function loginWithIdentifier(identifier, password, label){
+        try{
+            const payload = await postJson("/api/auth/login", {
+                username: identifier.trim(),
+                password
+            });
+            saveSession(payload, true);
+        }catch(error){ showStatus(`${label}失败\\n${error.message}`); }
+    }
+    document.getElementById("phoneLoginForm").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        loginWithIdentifier(
+            document.getElementById("phoneLoginIdentifier").value,
+            document.getElementById("phoneLoginPassword").value,
+            "手机登录"
+        );
+    });
+    document.getElementById("emailLoginForm").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        loginWithIdentifier(
+            document.getElementById("emailLoginIdentifier").value,
+            document.getElementById("emailLoginPassword").value,
+            "邮箱登录"
+        );
     });
     document.getElementById("nonceButton").addEventListener("click", async () => {
         try{
@@ -2391,7 +2538,7 @@ USER_LOGIN_HTML = '''
                 nonce: document.getElementById("walletNonce").value.trim(),
                 signature: document.getElementById("walletSignature").value.trim()
             });
-            saveSession(payload);
+            saveSession(payload, true);
         }catch(error){ showStatus(`钱包登录失败\\n${error.message}`); }
     });
     </script>
@@ -3234,16 +3381,14 @@ def user_file_upload():
     shard_num = len(shards)
 
     try:
-        client = get_ipfs_client()
-        try:
-            cid = client.add_bytes(encrypt_data)
-        finally:
-            if hasattr(client, "close"):
-                client.close()
-    except Exception:
-        return jsonify({"code":400,"msg":"IPFS节点未启动"}), 400
+        assign_nodes = real_user_storage_nodes(get_backup_nodes())
+        if not assign_nodes:
+            return jsonify({"code":503,"msg":"暂无可用用户节点，请先启动节点客户端后再上传"}), 503
+        assign_nodes = persist_file_to_storage_nodes(real_file_hash, encrypt_data, assign_nodes)
+    except Exception as exc:
+        return jsonify({"code":503,"msg":str(exc) or "用户节点存储失败"}), 503
 
-    assign_nodes = get_backup_nodes()
+    cid, ipfs_backup_status, ipfs_backup_error = backup_to_ipfs(encrypt_data)
     with DatabaseTransaction():
         try:
             current_cursor().execute('''
@@ -3277,10 +3422,12 @@ def user_file_upload():
 
     return jsonify({
         "code":200,
-        "msg":"文件加密上链完成",
+        "msg":"文件已写入用户节点，IPFS备份完成" if ipfs_backup_status == "ok" else "文件已写入用户节点，IPFS备份待重试",
         "data":{
             "file_hash":real_file_hash,
             "ipfs_cid":cid,
+            "ipfs_backup_status":ipfs_backup_status,
+            "ipfs_backup_error":ipfs_backup_error,
             "shard_count":shard_num,
             "storage_nodes":assign_nodes,
             "visibility":visibility,
@@ -3538,15 +3685,19 @@ def public_share_download(share_code):
         return jsonify({"code":403,"msg":"提取码错误"}), 403
 
     downloader_user_id = optional_downloader_user_id()
-    client = get_ipfs_client()
-    try:
+    encrypted = read_file_from_storage_nodes(share["file_hash"], share["stored_nodes"])
+    if encrypted is None:
+        if not share["ipfs_cid"]:
+            return jsonify({"code":502,"msg":"用户节点副本不可用，且暂无 IPFS 备份"}), 502
+        client = get_ipfs_client()
         try:
-            encrypted = client.cat(share["ipfs_cid"])
-        except Exception:
-            return jsonify({"code":502,"msg":"IPFS文件读取失败"}), 502
-    finally:
-        if hasattr(client, "close"):
-            client.close()
+            try:
+                encrypted = client.cat(share["ipfs_cid"])
+            except Exception:
+                return jsonify({"code":502,"msg":"用户节点副本不可用，IPFS文件读取失败"}), 502
+        finally:
+            if hasattr(client, "close"):
+                client.close()
     try:
         plain = aes_decrypt(encrypted)
     except RuntimeError as exc:
@@ -3635,12 +3786,16 @@ def file_download(file_hash):
         if record.get("owner_user_id") is not None:
             return jsonify({"code":403,"msg":"用户文件请通过分享链接下载"}), 403
         return jsonify({"code":403,"msg":"文件访问令牌无效"}), 403
-    client = get_ipfs_client()
-    try:
-        encrypted = client.cat(record["ipfs_cid"])
-    finally:
-        if hasattr(client, "close"):
-            client.close()
+    encrypted = read_file_from_storage_nodes(file_hash, record.get("nodes") or [])
+    if encrypted is None:
+        if not record["ipfs_cid"]:
+            return jsonify({"code":502,"msg":"用户节点副本不可用，且暂无 IPFS 备份"}), 502
+        client = get_ipfs_client()
+        try:
+            encrypted = client.cat(record["ipfs_cid"])
+        finally:
+            if hasattr(client, "close"):
+                client.close()
     try:
         plain = aes_decrypt(encrypted)
     except RuntimeError as exc:

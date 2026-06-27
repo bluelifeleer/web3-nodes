@@ -1,5 +1,6 @@
 import importlib
 import io
+import json
 import os
 import sys
 import types
@@ -1232,6 +1233,8 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertIn('id="adminAutoRefreshStatus"', server_main.ADMIN_HTML)
         self.assertIn("setInterval(refreshAdminData", server_main.ADMIN_HTML)
         self.assertIn("getIpfsStatus();", server_main.ADMIN_HTML)
+        self.assertIn("DOMContentLoaded", server_main.ADMIN_HTML)
+        self.assertIn("const ADMIN_REFRESH_INTERVAL_MS = 10000", server_main.ADMIN_HTML)
 
     def test_admin_page_uses_configurable_map_key_with_fallback(self):
         server_main = load_server_main(ADMIN_API_TOKEN="secret-token")
@@ -1463,7 +1466,7 @@ class MysqlConfigTest(unittest.TestCase):
         old_webview = sys.modules.get("webview")
         config_path = Path("tests/node_config.json")
         config_path.write_text(
-            '{"server_url":"http://example.com:9000","parent_invite":"INV1","heartbeat_interval":5,"reconnect_interval":2}',
+            '{"server_url":"http://example.com:9000","parent_invite":"INV1","heartbeat_interval":5,"reconnect_interval":2,"storage_dir":"D:/web3-node-data"}',
             encoding="utf-8",
         )
         try:
@@ -1477,6 +1480,7 @@ class MysqlConfigTest(unittest.TestCase):
             self.assertEqual(config["parent_invite"], "INV1")
             self.assertEqual(config["heartbeat_interval"], 5)
             self.assertEqual(config["reconnect_interval"], 2)
+            self.assertEqual(config["storage_dir"], "D:/web3-node-data")
         finally:
             config_path.unlink(missing_ok=True)
             sys.modules.pop("client", None)
@@ -1846,7 +1850,7 @@ class MysqlConfigTest(unittest.TestCase):
         server_main = load_server_main(SESSION_SECRET="session-secret")
         server_main.init_db = lambda: True
 
-        response = server_main.app.test_client().get("/user/upload")
+        response = server_main.app.test_client().get("/user/upload?campaign=summer")
 
         self.assertEqual(response.status_code, 200)
         body = response.get_data(as_text=True)
@@ -1856,7 +1860,9 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertIn("Authorization", body)
         self.assertIn("user_token", body)
         self.assertIn("requireUserLogin", body)
-        self.assertIn('window.location.href = "/user/login"', body)
+        self.assertIn("redirectToLogin", body)
+        self.assertIn('searchParams.set("next"', body)
+        self.assertIn('window.location.href = loginUrl.toString()', body)
 
     def test_user_login_page_renders_forms_and_token_storage(self):
         server_main = load_server_main(SESSION_SECRET="session-secret")
@@ -1870,16 +1876,29 @@ class MysqlConfigTest(unittest.TestCase):
         for marker in (
             'data-auth-tab="login"',
             'data-auth-tab="register"',
+            'data-auth-tab="phone"',
+            'data-auth-tab="email"',
             'data-auth-tab="wallet"',
+            'data-auth-tab="wechat"',
+            'data-auth-tab="qq"',
             'id="loginPanel"',
             'id="registerPanel"',
+            'id="phonePanel"',
+            'id="emailPanel"',
             'id="walletPanel"',
+            'id="wechatPanel"',
+            'id="qqPanel"',
             "switchAuthTab",
+            "redirectAfterLogin",
+            "URLSearchParams",
         ):
             self.assertIn(marker, body)
+        for provider in ("163.com", "gmail.com", "outlook.com", "icloud.com"):
+            self.assertIn(provider, body)
         self.assertIn("/api/auth/register", body)
         self.assertIn("/api/auth/login", body)
         self.assertIn("/api/wallet/login", body)
+        self.assertIn("saveSession(payload, true)", body)
         self.assertIn('localStorage.setItem("user_token"', body)
 
     def test_user_dashboard_page_uses_user_product_apis(self):
@@ -2081,6 +2100,7 @@ class MysqlConfigTest(unittest.TestCase):
         server_main.file_shard = lambda data: [data]
         server_main.get_file_hash = lambda data: new_hash
         server_main.get_backup_nodes = lambda: ["NODE_A"]
+        server_main.persist_file_to_storage_nodes = lambda file_hash, encrypted, nodes: nodes
         server_main.get_ipfs_client = lambda: FakeIPFSClient()
 
         response = server_main.app.test_client().post(
@@ -2148,6 +2168,7 @@ class MysqlConfigTest(unittest.TestCase):
         server_main.file_shard = lambda data: [data]
         server_main.get_file_hash = lambda data: new_hash
         server_main.get_backup_nodes = lambda: ["NODE_A"]
+        server_main.persist_file_to_storage_nodes = lambda file_hash, encrypted, nodes: nodes
         server_main.get_ipfs_client = lambda: FakeIPFSClient()
 
         response = server_main.app.test_client().post(
@@ -2161,6 +2182,114 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertIn(("autocommit", False), fake_db.events)
         self.assertIn(("commit", False), fake_db.events)
         self.assertEqual(fake_db.events[-1], ("autocommit", True))
+
+    def test_user_file_upload_uses_user_nodes_when_ipfs_backup_fails(self):
+        auth = importlib.import_module("auth")
+        server_main = load_server_main(SESSION_SECRET="session-secret")
+        token = auth.create_session_token({"user_id": 7, "username": "alice"}, "session-secret")
+        new_hash = "f" * 64
+        stored_payloads = []
+
+        class FakeCursor:
+            def __init__(self):
+                self.last_sql = ""
+                self.executed = []
+
+            def execute(self, sql, params=None):
+                self.last_sql = sql
+                self.executed.append((sql, params))
+
+            def fetchone(self):
+                if "from app_user" in self.last_sql:
+                    return (7, "alice", "hash", "0xabc", "active")
+                if "from file_chain_record" in self.last_sql:
+                    return None
+                return None
+
+        class FakeConnection:
+            def __init__(self):
+                self.autocommit_state = True
+
+            def get_autocommit(self):
+                return self.autocommit_state
+
+            def autocommit(self, value):
+                self.autocommit_state = value
+
+            def commit(self):
+                pass
+
+            def rollback(self):
+                pass
+
+        server_main.cursor = FakeCursor()
+        server_main.db = FakeConnection()
+        server_main.init_db = lambda: True
+        server_main.aes_encrypt = lambda data: b"encrypted"
+        server_main.file_shard = lambda data: [data]
+        server_main.get_file_hash = lambda data: new_hash
+        server_main.get_backup_nodes = lambda: ["NODE_A", "NODE_B", "SERVER_BACKUP_NODE"]
+        server_main.persist_file_to_storage_nodes = lambda file_hash, encrypted, nodes: stored_payloads.append((file_hash, encrypted, nodes)) or nodes
+        server_main.get_ipfs_client = lambda: (_ for _ in ()).throw(Exception("ipfs down"))
+
+        response = server_main.app.test_client().post(
+            "/api/user/files",
+            headers={"Authorization": f"Bearer {token}"},
+            data={"file": (io.BytesIO(b"plain"), "demo.txt")},
+            content_type="multipart/form-data",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()["data"]
+        self.assertEqual(payload["storage_nodes"], ["NODE_A", "NODE_B"])
+        self.assertEqual(payload["ipfs_backup_status"], "failed")
+        self.assertEqual(payload["ipfs_cid"], "")
+        self.assertEqual(stored_payloads, [(new_hash, b"encrypted", ["NODE_A", "NODE_B"])])
+        insert_params = [
+            params
+            for sql, params in server_main.cursor.executed
+            if sql.strip().lower().startswith("insert into file_chain_record")
+        ][0]
+        self.assertEqual(insert_params[2], "")
+        self.assertEqual(json.loads(insert_params[6]), ["NODE_A", "NODE_B"])
+
+    def test_user_file_upload_requires_real_user_storage_nodes(self):
+        auth = importlib.import_module("auth")
+        server_main = load_server_main(SESSION_SECRET="session-secret")
+        token = auth.create_session_token({"user_id": 7, "username": "alice"}, "session-secret")
+
+        class FakeCursor:
+            def __init__(self):
+                self.last_sql = ""
+
+            def execute(self, sql, params=None):
+                self.last_sql = sql
+
+            def fetchone(self):
+                if "from app_user" in self.last_sql:
+                    return (7, "alice", "hash", "0xabc", "active")
+                if "from file_chain_record" in self.last_sql:
+                    return None
+                return None
+
+        server_main.cursor = FakeCursor()
+        server_main.init_db = lambda: True
+        server_main.aes_encrypt = lambda data: b"encrypted"
+        server_main.file_shard = lambda data: [data]
+        server_main.get_file_hash = lambda data: "a" * 64
+        server_main.get_backup_nodes = lambda: ["SERVER_BACKUP_NODE"]
+        server_main.persist_file_to_storage_nodes = lambda *args: self.fail("should not persist without user nodes")
+        server_main.get_ipfs_client = lambda: self.fail("should not upload only to IPFS without user nodes")
+
+        response = server_main.app.test_client().post(
+            "/api/user/files",
+            headers={"Authorization": f"Bearer {token}"},
+            data={"file": (io.BytesIO(b"plain"), "demo.txt")},
+            content_type="multipart/form-data",
+        )
+
+        self.assertEqual(response.status_code, 503)
+        self.assertIn("暂无可用用户节点", response.get_json()["msg"])
 
     def test_user_file_upload_duplicate_insert_failure_returns_409(self):
         auth = importlib.import_module("auth")
@@ -2223,6 +2352,7 @@ class MysqlConfigTest(unittest.TestCase):
         server_main.file_shard = lambda data: [data]
         server_main.get_file_hash = lambda data: duplicate_hash
         server_main.get_backup_nodes = lambda: ["NODE_A"]
+        server_main.persist_file_to_storage_nodes = lambda file_hash, encrypted, nodes: nodes
         server_main.get_ipfs_client = lambda: FakeIPFSClient()
 
         response = server_main.app.test_client().post(
@@ -2790,6 +2920,137 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertEqual(log_params[3], 9)
         self.assertEqual(events.count("commit"), 1)
         self.assertNotIn("rollback", events)
+
+    def test_share_download_prefers_user_node_storage_before_ipfs(self):
+        shares = importlib.import_module("shares")
+        server_main = load_server_main(SESSION_SECRET="session-secret")
+        now = server_main.datetime.now()
+        share_hash = shares.hash_extract_code("ABCD", salt="fixedsalt")
+
+        class FakeCursor:
+            def __init__(self):
+                self.executed = []
+                self.last_sql = ""
+                self.rowcount = 1
+
+            def execute(self, sql, params=None):
+                self.last_sql = sql
+                self.executed.append((sql, params))
+                self.rowcount = 1
+
+            def fetchone(self):
+                if "from file_share" in self.last_sql:
+                    return (
+                        "share123",
+                        "f" * 64,
+                        7,
+                        "public",
+                        share_hash,
+                        None,
+                        0,
+                        0,
+                        "active",
+                        now,
+                        "demo.txt",
+                        "cid1",
+                        10,
+                        '["NODE_A"]',
+                        "0xowner",
+                    )
+                return None
+
+        class FakeConnection:
+            def get_autocommit(self):
+                return True
+
+            def autocommit(self, value):
+                pass
+
+            def commit(self):
+                pass
+
+            def rollback(self):
+                pass
+
+        server_main.cursor = FakeCursor()
+        server_main.db = FakeConnection()
+        server_main.init_db = lambda: True
+        server_main.read_file_from_storage_nodes = lambda file_hash, nodes: b"encrypted-from-node"
+        server_main.get_ipfs_client = lambda: self.fail("IPFS should not be used when user node storage is available")
+        server_main.aes_decrypt = lambda data: b"plain-from-node"
+
+        response = server_main.app.test_client().get("/api/share/share123/download?extract_code=ABCD")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data, b"plain-from-node")
+
+    def test_share_download_falls_back_to_ipfs_when_user_node_storage_missing(self):
+        server_main = load_server_main()
+        now = server_main.datetime.now()
+
+        class FakeCursor:
+            def __init__(self):
+                self.executed = []
+                self.last_sql = ""
+                self.rowcount = 1
+
+            def execute(self, sql, params=None):
+                self.last_sql = sql
+                self.executed.append((sql, params))
+                self.rowcount = 1
+
+            def fetchone(self):
+                if "from file_share" in self.last_sql:
+                    return (
+                        "share123",
+                        "f" * 64,
+                        7,
+                        "public",
+                        "",
+                        None,
+                        0,
+                        0,
+                        "active",
+                        now,
+                        "demo.txt",
+                        "cid1",
+                        10,
+                        '["NODE_A"]',
+                        "0xowner",
+                    )
+                return None
+
+        class FakeConnection:
+            def get_autocommit(self):
+                return True
+
+            def autocommit(self, value):
+                pass
+
+            def commit(self):
+                pass
+
+            def rollback(self):
+                pass
+
+        class FakeIPFSClient:
+            def cat(self, cid):
+                return b"encrypted-from-ipfs"
+
+            def close(self):
+                pass
+
+        server_main.cursor = FakeCursor()
+        server_main.db = FakeConnection()
+        server_main.init_db = lambda: True
+        server_main.read_file_from_storage_nodes = lambda file_hash, nodes: None
+        server_main.get_ipfs_client = lambda: FakeIPFSClient()
+        server_main.aes_decrypt = lambda data: b"plain-from-ipfs"
+
+        response = server_main.app.test_client().get("/api/share/share123/download")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data, b"plain-from-ipfs")
 
     def test_share_download_atomic_rowcount_zero_aborts_before_side_effects(self):
         server_main = load_server_main()

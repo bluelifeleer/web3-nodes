@@ -17,6 +17,7 @@ SERVER_URL = "http://127.0.0.1:8000"
 # 推广参数自动注入，无需手动填写
 PARENT_INVITE = ""
 HEARTBEAT_INTERVAL = 60
+NODE_STORAGE_DIR = ""
 
 
 def load_client_config(config_path="node_config.json"):
@@ -24,6 +25,7 @@ def load_client_config(config_path="node_config.json"):
         "server_url": SERVER_URL,
         "parent_invite": PARENT_INVITE,
         "heartbeat_interval": HEARTBEAT_INTERVAL,
+        "storage_dir": NODE_STORAGE_DIR,
     }
     path = Path(config_path)
     if path.exists():
@@ -36,6 +38,7 @@ def load_client_config(config_path="node_config.json"):
     config["server_url"] = os.getenv("NODE_SERVER_URL", config["server_url"])
     config["parent_invite"] = os.getenv("NODE_PARENT_INVITE", config["parent_invite"])
     config["heartbeat_interval"] = int(os.getenv("NODE_HEARTBEAT_INTERVAL", config["heartbeat_interval"]))
+    config["storage_dir"] = os.getenv("NODE_STORAGE_DIR", config["storage_dir"])
     return config
 
 # 解析启动参数（下载页携带的invite推广码）
@@ -43,7 +46,39 @@ def get_invite_arg():
     for arg in sys.argv:
         if arg.startswith("invite="):
             return arg.replace("invite=", "")
+        if arg.startswith("--invite="):
+            return arg.split("=", 1)[1].strip()
     return ""
+
+
+def get_storage_dir_arg():
+    for arg in sys.argv[1:]:
+        if arg.startswith("storage_dir="):
+            return arg.split("=", 1)[1].strip()
+        if arg.startswith("--storage-dir="):
+            return arg.split("=", 1)[1].strip()
+        if arg.startswith("--storage_dir="):
+            return arg.split("=", 1)[1].strip()
+    return ""
+
+
+def ensure_storage_dir(storage_dir):
+    if not storage_dir:
+        return None
+    path = Path(storage_dir).expanduser()
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def get_directory_size_bytes(path):
+    total = 0
+    for file_path in path.rglob("*"):
+        try:
+            if file_path.is_file():
+                total += file_path.stat().st_size
+        except OSError:
+            continue
+    return total
 
 # 获取Mac设备唯一指纹（防多开、防作弊、一机一号永久绑定）
 def get_device_id():
@@ -51,7 +86,14 @@ def get_device_id():
     return str(uuid.getnode())
 
 # 适配Mac读取本地IPFS存储算力
-def get_ipfs_disk():
+def get_ipfs_disk(storage_dir=""):
+    if storage_dir:
+        try:
+            path = ensure_storage_dir(storage_dir)
+            if path is not None:
+                return round(get_directory_size_bytes(path) / (1024 ** 3), 2)
+        except Exception:
+            return 0.0
     try:
         # Mac原生IPFS命令适配
         res = subprocess.check_output("ipfs stats repo --human", shell=True).decode()
@@ -66,12 +108,15 @@ def get_ipfs_disk():
 
 # 核心节点运行逻辑
 def main():
-    global SERVER_URL, PARENT_INVITE, HEARTBEAT_INTERVAL
+    global SERVER_URL, PARENT_INVITE, HEARTBEAT_INTERVAL, NODE_STORAGE_DIR
     config = load_client_config()
     SERVER_URL = config["server_url"]
     # 读取下载页传入的上级推广码
     PARENT_INVITE = get_invite_arg() or config["parent_invite"]
     HEARTBEAT_INTERVAL = int(config["heartbeat_interval"])
+    NODE_STORAGE_DIR = get_storage_dir_arg() or config["storage_dir"]
+    if NODE_STORAGE_DIR:
+        ensure_storage_dir(NODE_STORAGE_DIR)
 
     # 生成唯一设备标识+用户节点地址
     device_id = get_device_id()
@@ -90,7 +135,7 @@ def main():
 
     # 永久循环心跳上报（60秒一次）
     while True:
-        disk_usage = get_ipfs_disk()
+        disk_usage = get_ipfs_disk(NODE_STORAGE_DIR)
         try:
             requests.post(f"{SERVER_URL}/heartbeat", json={
                 "user_addr": user_addr,
@@ -119,7 +164,7 @@ def open_map_window():
     html = '''
     <html style="margin:0;padding:0">
     <body style="margin:0;padding:0">
-    <script src="https://webapi.amap.com/maps?v=2.0&key=6f17f9896974a8686929496921212479"></script>
+    <script src="https://webapi.amap.com/maps?v=2.0&key=72c8873c3ca27f35e4815ec41e6fae24"></script>
     <div id="map" style="width:100vw;height:100vh"></div>
     <script>
     let map = new AMap.Map('map',{zoom:4,center:[105,35]});
