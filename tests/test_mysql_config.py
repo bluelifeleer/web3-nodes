@@ -2123,6 +2123,149 @@ class MysqlConfigTest(unittest.TestCase):
             else:
                 sys.modules["webview"] = old_webview
 
+    def test_client_console_rejects_hostile_host_without_token_exposure(self):
+        old_requests = sys.modules.get("requests")
+        old_webview = sys.modules.get("webview")
+        try:
+            sys.modules["requests"] = types.SimpleNamespace(post=lambda *args, **kwargs: None, get=lambda *args, **kwargs: None)
+            sys.modules["webview"] = None
+            sys.modules.pop("client", None)
+            client_module = importlib.import_module("client")
+            state = client_module.create_client_state("http://server", "NODE_A", "MAC_A", "D:/old", 8787)
+            server = client_module.ThreadingHTTPServer(
+                ("127.0.0.1", 0),
+                client_module.make_manage_handler(state),
+            )
+            thread = client_module.threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=5)
+            try:
+                connection.putrequest("GET", "/", skip_host=True)
+                connection.putheader("Host", f"attacker.example:{server.server_port}")
+                connection.endheaders()
+
+                response = connection.getresponse()
+                body = response.read().decode("utf-8")
+
+                self.assertEqual(response.status, 403)
+                self.assertNotIn(state["csrf_token"], body)
+            finally:
+                connection.close()
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+        finally:
+            sys.modules.pop("client", None)
+            if old_requests is None:
+                sys.modules.pop("requests", None)
+            else:
+                sys.modules["requests"] = old_requests
+            if old_webview is None:
+                sys.modules.pop("webview", None)
+            else:
+                sys.modules["webview"] = old_webview
+
+    def test_client_console_accepts_localhost_host(self):
+        old_requests = sys.modules.get("requests")
+        old_webview = sys.modules.get("webview")
+        try:
+            sys.modules["requests"] = types.SimpleNamespace(post=lambda *args, **kwargs: None, get=lambda *args, **kwargs: None)
+            sys.modules["webview"] = None
+            sys.modules.pop("client", None)
+            client_module = importlib.import_module("client")
+            state = client_module.create_client_state("http://server", "NODE_A", "MAC_A", "D:/old", 8787)
+            server = client_module.ThreadingHTTPServer(
+                ("127.0.0.1", 0),
+                client_module.make_manage_handler(state),
+            )
+            thread = client_module.threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=5)
+            try:
+                connection.putrequest("GET", "/", skip_host=True)
+                connection.putheader("Host", f"localhost:{server.server_port}")
+                connection.endheaders()
+
+                response = connection.getresponse()
+                body = response.read().decode("utf-8")
+
+                self.assertEqual(response.status, 200)
+                self.assertIn("节点控制台", body)
+                self.assertIn(state["csrf_token"], body)
+            finally:
+                connection.close()
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+        finally:
+            sys.modules.pop("client", None)
+            if old_requests is None:
+                sys.modules.pop("requests", None)
+            else:
+                sys.modules["requests"] = old_requests
+            if old_webview is None:
+                sys.modules.pop("webview", None)
+            else:
+                sys.modules["webview"] = old_webview
+
+    def test_client_storage_route_rejects_hostile_origin_or_referer(self):
+        old_requests = sys.modules.get("requests")
+        old_webview = sys.modules.get("webview")
+        try:
+            sys.modules["requests"] = types.SimpleNamespace(post=lambda *args, **kwargs: None, get=lambda *args, **kwargs: None)
+            sys.modules["webview"] = None
+            sys.modules.pop("client", None)
+            client_module = importlib.import_module("client")
+            client_module.inspect_storage_dir = lambda storage_dir: {
+                "storage_path": storage_dir,
+                "storage_status": "ok",
+                "storage_total_gb": 100,
+                "storage_used_gb": 20,
+                "storage_free_gb": 80,
+            }
+            for header_name in ("Origin", "Referer"):
+                state = client_module.create_client_state("http://server", "NODE_A", "MAC_A", "D:/old", 8787)
+                server = client_module.ThreadingHTTPServer(
+                    ("127.0.0.1", 0),
+                    client_module.make_manage_handler(state),
+                )
+                thread = client_module.threading.Thread(target=server.serve_forever, daemon=True)
+                thread.start()
+                connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=5)
+                try:
+                    connection.request(
+                        "POST",
+                        "/api/storage",
+                        body=json.dumps({"storage_dir": "D:/new"}).encode("utf-8"),
+                        headers={
+                            "Host": f"127.0.0.1:{server.server_port}",
+                            "Content-Type": "application/json",
+                            "X-CSRF-Token": state["csrf_token"],
+                            header_name: "http://attacker.example/console",
+                        },
+                    )
+                    response = connection.getresponse()
+                    body = json.loads(response.read().decode("utf-8"))
+
+                    self.assertEqual(response.status, 403)
+                    self.assertFalse(body["ok"])
+                    self.assertEqual(state["storage_dir"], "D:/old")
+                finally:
+                    connection.close()
+                    server.shutdown()
+                    server.server_close()
+                    thread.join(timeout=5)
+        finally:
+            sys.modules.pop("client", None)
+            if old_requests is None:
+                sys.modules.pop("requests", None)
+            else:
+                sys.modules["requests"] = old_requests
+            if old_webview is None:
+                sys.modules.pop("webview", None)
+            else:
+                sys.modules["webview"] = old_webview
+
     def test_client_storage_probe_reports_unavailable_directory(self):
         old_requests = sys.modules.get("requests")
         old_webview = sys.modules.get("webview")

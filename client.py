@@ -268,6 +268,46 @@ def make_manage_handler(state):
         def _route_path(self):
             return urlparse(self.path).path
 
+        def _is_allowed_host(self, value):
+            if not value:
+                return False
+            host = value.strip().lower()
+            allowed_names = {"127.0.0.1", "localhost", "::1"}
+            allowed_ports = {"", str(state.get("manage_port", "")), str(getattr(self.server, "server_port", ""))}
+            if host == "::1":
+                return True
+            if host.startswith("[::1]"):
+                port = ""
+                if host.startswith("[::1]:"):
+                    port = host[len("[::1]:"):]
+                return port in allowed_ports
+            if ":" in host:
+                name, port = host.rsplit(":", 1)
+            else:
+                name, port = host, ""
+            return name in allowed_names and port in allowed_ports
+
+        def _is_allowed_url_header(self, value):
+            if not value:
+                return True
+            parsed = urlparse(value)
+            if not parsed.scheme and not parsed.netloc:
+                return True
+            return self._is_allowed_host(parsed.netloc)
+
+        def _validate_host(self):
+            if self._is_allowed_host(self.headers.get("Host", "")):
+                return True
+            self._send_json({"ok": False, "error": "invalid host"}, status=403)
+            return False
+
+        def _validate_mutation_source(self):
+            for header_name in ("Origin", "Referer"):
+                if not self._is_allowed_url_header(self.headers.get(header_name, "")):
+                    self._send_json({"ok": False, "error": "invalid request origin"}, status=403)
+                    return False
+            return True
+
         def _read_json(self):
             try:
                 length = int(self.headers.get("Content-Length", "0") or 0)
@@ -291,6 +331,8 @@ def make_manage_handler(state):
                 return None
 
         def _read_mutation_json(self):
+            if not self._validate_mutation_source():
+                return None
             content_type = self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
             if content_type != "application/json":
                 self._send_json({"ok": False, "error": "content type must be application/json"}, status=400)
@@ -321,6 +363,8 @@ def make_manage_handler(state):
             self.wfile.write(body)
 
         def do_GET(self):
+            if not self._validate_host():
+                return
             path = self._route_path()
             if path == "/":
                 self._send_html(CLIENT_MANAGE_HTML.replace("__CSRF_TOKEN__", state["csrf_token"]))
@@ -334,6 +378,8 @@ def make_manage_handler(state):
                 self._send_json({"ok": False, "error": "not found"}, status=404)
 
         def do_POST(self):
+            if not self._validate_host():
+                return
             path = self._route_path()
             data = self._read_mutation_json()
             if data is None:
