@@ -109,6 +109,7 @@ if os.getenv("WEB3_NODES_SKIP_DOTENV") != "1":
 ADMIN_API_TOKEN = os.getenv("ADMIN_API_TOKEN", "")
 SESSION_SECRET = os.getenv("SESSION_SECRET")
 MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_MB", "100")) * 1024 * 1024
+AMAP_WEB_KEY = os.getenv("AMAP_WEB_KEY", "").strip()
 app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_BYTES
 db = None
 cursor = None
@@ -257,6 +258,45 @@ def admin_token_is_valid():
 
 def admin_token_value_is_valid(token):
     return bool(ADMIN_API_TOKEN) and secrets.compare_digest(token or "", ADMIN_API_TOKEN)
+
+
+COMMERCIAL_PAGE_CSS = '''
+        :root{--ink:#172033;--muted:#64748b;--line:#dbe6ef;--surface:#fff;--soft:#f6f9fc;--brand:#0f766e;--brand-2:#14b8a6;--accent:#f0b429;--hot:#ff6b6b;}
+        *{box-sizing:border-box;}
+        body.commercial-page{margin:0;background:
+            radial-gradient(circle at 14% 8%,rgba(20,184,166,.18),transparent 28%),
+            radial-gradient(circle at 84% 2%,rgba(240,180,41,.15),transparent 24%),
+            linear-gradient(180deg,#f7fbfc 0%,#edf4f7 100%);
+            color:var(--ink);font-family:Arial,"Microsoft YaHei",sans-serif;}
+        a{text-decoration:none;color:inherit;}
+        .page-shell{width:min(1180px,calc(100vw - 32px));margin:0 auto;padding:24px 0 42px;}
+        .modern-nav{display:flex;justify-content:space-between;align-items:center;gap:16px;margin-bottom:22px;}
+        .brand-lockup{display:flex;align-items:center;gap:12px;font-weight:800;color:#0f3440;}
+        .brand-mark{width:34px;height:34px;border-radius:8px;background:linear-gradient(135deg,#0b4f56,var(--brand-2) 58%,var(--accent));box-shadow:0 14px 30px rgba(20,184,166,.30);}
+        .nav-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap;color:#33515c;}
+        .nav-actions a{position:relative;overflow:hidden;padding:9px 13px;border:1px solid rgba(15,118,110,.18);border-radius:7px;background:rgba(255,255,255,.72);box-shadow:0 10px 26px rgba(15,23,42,.06);transition:transform .18s ease,box-shadow .18s ease,border-color .18s ease;}
+        .nav-actions a:hover{transform:translateY(-2px);border-color:rgba(20,184,166,.46);box-shadow:0 18px 34px rgba(20,184,166,.16);}
+        .page-hero{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:20px;align-items:end;margin:10px 0 20px;}
+        .page-kicker{display:inline-flex;margin-bottom:10px;padding:7px 10px;border-radius:999px;background:linear-gradient(135deg,#e8f8f2,#fff7df);color:#116454;font-size:13px;font-weight:700;box-shadow:inset 0 0 0 1px rgba(20,184,166,.16);}
+        .page-hero h1{margin:0;font-size:34px;line-height:1.14;letter-spacing:0;color:#102a36;}
+        .page-hero p{margin:10px 0 0;color:var(--muted);line-height:1.7;max-width:720px;}
+        .commercial-card,.box,.panel,main.auth-card{background:linear-gradient(180deg,rgba(255,255,255,.96),rgba(248,252,252,.92));border:1px solid rgba(148,163,184,.30);border-radius:8px;box-shadow:0 18px 42px rgba(15,23,42,.08),inset 0 1px 0 rgba(255,255,255,.72);}
+        .commercial-card.hover-lift,.hover-lift{transition:transform .18s ease,box-shadow .18s ease,border-color .18s ease;}
+        .commercial-card.hover-lift:hover,.hover-lift:hover{transform:translateY(-3px);border-color:rgba(20,184,166,.36);box-shadow:0 24px 52px rgba(15,23,42,.12);}
+        .box,.panel,main.auth-card{padding:18px;}
+        .commercial-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px;}
+        .premium-button,.primary-action,body.commercial-page button,body.commercial-page .btn{position:relative!important;isolation:isolate;overflow:hidden!important;display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:42px;padding:10px 17px!important;background:linear-gradient(135deg,#0f766e,#14b8a6 48%,#f0b429)!important;color:#ffffff!important;border:1px solid rgba(255,255,255,.28)!important;border-radius:8px!important;box-shadow:0 16px 34px rgba(20,184,166,.24),0 4px 12px rgba(15,118,110,.20),inset 0 1px 0 rgba(255,255,255,.38)!important;cursor:pointer;font-weight:800!important;letter-spacing:0;transition:transform .18s ease,box-shadow .18s ease,filter .18s ease!important;}
+        .premium-button::before,.primary-action::before,body.commercial-page button::before,body.commercial-page .btn::before{content:"";position:absolute;inset:0;background:linear-gradient(120deg,transparent 0%,rgba(255,255,255,.34) 45%,transparent 62%);transform:translateX(-120%);transition:transform .55s ease;z-index:-1;}
+        .premium-button:hover,.primary-action:hover,body.commercial-page button:hover,body.commercial-page .btn:hover{transform:translateY(-2px)!important;filter:saturate(1.08);box-shadow:0 22px 42px rgba(20,184,166,.30),0 8px 18px rgba(240,180,41,.18),inset 0 1px 0 rgba(255,255,255,.45)!important;}
+        .premium-button:hover::before,.primary-action:hover::before,body.commercial-page button:hover::before,body.commercial-page .btn:hover::before{transform:translateX(115%);}
+        .button-shine{position:absolute;inset:1px;border-radius:7px;background:linear-gradient(180deg,rgba(255,255,255,.28),transparent 42%);pointer-events:none;}
+        .secondary-action,body.commercial-page button.secondary,body.commercial-page .btn.secondary{background:linear-gradient(135deg,rgba(255,255,255,.96),#eefbf8)!important;color:#155e63!important;border:1px solid rgba(20,184,166,.34)!important;box-shadow:0 14px 30px rgba(15,23,42,.08),inset 0 1px 0 rgba(255,255,255,.85)!important;}
+        input,select{background:#fff;border:1px solid #cbd5e1;border-radius:7px;color:#172033;}
+        table{background:white;border-radius:8px;overflow:hidden;}
+        th{background:#edf7f6!important;color:#183b44;}
+        .status,.notice,.linkbox,pre{border-radius:8px;}
+        @media (max-width:800px){.modern-nav,.page-hero{align-items:flex-start;flex-direction:column;display:flex;}.nav-actions{width:100%;}.nav-actions a{flex:1;text-align:center;}.page-hero h1{font-size:28px;}}
+'''
 
 
 def get_bearer_token():
@@ -1272,6 +1312,7 @@ HOME_HTML = '''
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Web3 节点激励与文件分享系统</title>
     <style>
+''' + COMMERCIAL_PAGE_CSS + '''
         *{box-sizing:border-box;}
         body{margin:0;font-family:Arial,"Microsoft YaHei",sans-serif;background:#f4f7fb;color:#172033;}
         a{text-decoration:none;color:inherit;}
@@ -1320,10 +1361,10 @@ HOME_HTML = '''
         }
     </style>
 </head>
-<body>
+<body class="commercial-page home-page">
     <div class="hero">
         <div class="wrap">
-            <nav>
+            <nav class="modern-nav">
                 <div class="brand">Web3 Nodes Store</div>
                 <div class="tagline">企业级分布式存储网络</div>
             </nav>
@@ -1333,9 +1374,9 @@ HOME_HTML = '''
                     <h1>Web3 节点激励与文件分享系统</h1>
                     <p class="lead">面向节点运营、私有文件分发和收益结算的企业级分布式存储一体化平台。用户上传文件生成可控分享链接，节点贡献存储与带宽获得积分，后台实时查看网络、收益和提现审核。</p>
                     <div class="actions">
-                        <a class="btn primary" href="/user/login">开始使用</a>
-                        <a class="btn secondary" href="/user/upload">上传并创建分享</a>
-                        <a class="btn secondary" href="/admin">进入服务端后台</a>
+                        <a class="btn primary premium-button hover-lift" href="/user/login">开始使用<span class="button-shine"></span></a>
+                        <a class="btn secondary premium-button hover-lift" href="/user/upload">上传并创建分享<span class="button-shine"></span></a>
+                        <a class="btn secondary premium-button hover-lift" href="/admin">进入服务端后台<span class="button-shine"></span></a>
                     </div>
                     <div class="signal-row">
                         <div class="signal"><b>用户侧闭环</b>登录、上传、分享、收益都在同一条路径里完成。</div>
@@ -1343,7 +1384,7 @@ HOME_HTML = '''
                         <div class="signal"><b>运营侧可视</b>后台自动刷新网络、文件、收益和提现。</div>
                     </div>
                 </main>
-                <aside class="console">
+                <aside class="console commercial-card">
                     <h2>商业化能力概览</h2>
                     <div class="metric"><span>文件分享</span><strong>提取码 / 过期 / 限次</strong></div>
                     <div class="metric"><span>节点激励</span><strong>存储 + 下载积分</strong></div>
@@ -1361,17 +1402,17 @@ HOME_HTML = '''
                 <p>把分散页面收进一个首页，用户、节点和管理员都能从这里进入自己的工作流。</p>
             </div>
             <div class="cards">
-                <article class="card">
+                <article class="card commercial-card">
                     <h3>用户产品</h3>
                     <p>注册登录、钱包绑定、上传文件、创建分享链接，并查看积分收益和提现记录。</p>
                     <a href="/user/login">登录注册</a> · <a href="/user/dashboard">用户面板</a> · <a href="/user/upload">上传文件</a>
                 </article>
-                <article class="card">
+                <article class="card commercial-card">
                     <h3>服务端运营</h3>
                     <p>管理节点、文件、分享、下载、积分流水与提现审核，后台数据自动刷新。</p>
                     <a href="/admin/login">后台登录</a> · <a href="/admin">后台面板</a>
                 </article>
-                <article class="card">
+                <article class="card commercial-card">
                     <h3>节点接入</h3>
                     <p>客户端节点自动注册、心跳上报和断线重连，适合批量扩展存储网络。</p>
                     <a href="/api/health">服务健康检查</a>
@@ -1409,9 +1450,15 @@ ADMIN_LOGIN_HTML = '''
     <meta charset="UTF-8">
     <title>后台登录</title>
     <style>
+''' + COMMERCIAL_PAGE_CSS + '''
         *{box-sizing:border-box;}
-        body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#f5f7fa;font-family:Arial,"Microsoft YaHei",sans-serif;color:#1f2937;}
-        main{width:min(420px,calc(100vw - 32px));background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:28px;box-shadow:0 10px 30px rgba(15,23,42,.08);}
+        body{min-height:100vh;}
+        .login-shell{width:min(1040px,calc(100vw - 32px));margin:0 auto;padding:28px 0 48px;}
+        .auth-layout{display:grid;grid-template-columns:minmax(0,1fr) minmax(360px,.7fr);gap:22px;align-items:center;min-height:calc(100vh - 110px);}
+        .login-copy{padding:28px;color:#17313a;}
+        .login-copy h1{font-size:38px;line-height:1.12;margin:0 0 14px;}
+        .login-copy p{color:#607080;line-height:1.8;margin:0;}
+        main{width:100%;}
         h1{font-size:24px;margin:0 0 18px;}
         label{display:block;margin-bottom:8px;font-weight:600;}
         input{width:100%;padding:12px;border:1px solid #cbd5e1;border-radius:6px;font-size:15px;}
@@ -1419,8 +1466,19 @@ ADMIN_LOGIN_HTML = '''
         .status{min-height:22px;margin-top:12px;color:#b45309;font-size:14px;white-space:pre-wrap;}
     </style>
 </head>
-<body>
-    <main>
+<body class="commercial-page admin-login-page">
+    <div class="login-shell">
+        <nav class="modern-nav">
+            <div class="brand-lockup"><span class="brand-mark"></span><span>Web3 Nodes Store</span></div>
+            <div class="nav-actions"><a href="/">首页</a><a href="/admin">后台</a></div>
+        </nav>
+        <div class="auth-layout">
+            <section class="login-copy commercial-card">
+                <span class="page-kicker">运营后台</span>
+                <h1>安全进入节点与收益运营中心</h1>
+                <p>统一管理节点在线状态、文件分发、下载记录、积分流水与提现审核。登录后后台会自动加载并刷新核心数据。</p>
+            </section>
+    <main class="auth-card commercial-card">
         <h1>后台登录</h1>
         <form id="adminLoginForm">
             <label for="adminTokenInput">后台 Token</label>
@@ -1429,6 +1487,8 @@ ADMIN_LOGIN_HTML = '''
         </form>
         <div id="loginStatus" class="status"></div>
     </main>
+        </div>
+    </div>
     <script>
     const form = document.getElementById("adminLoginForm");
     const statusBox = document.getElementById("loginStatus");
@@ -1463,8 +1523,9 @@ ADMIN_HTML = '''
     <meta charset="UTF-8">
     <title>Web3节点激励后台面板</title>
     <style>
+''' + COMMERCIAL_PAGE_CSS + '''
         *{margin:0;padding:0;box-sizing:border-box;}
-        body{padding:20px;background:#f5f7fa;font-family:微软雅黑;}
+        body{padding:0;font-family:微软雅黑;}
         .box{background:#fff;padding:20px;border-radius:8px;margin-bottom:20px;box-shadow:0 0 8px #eee;}
         h3{margin-bottom:15px;color:#222;}
         table{width:100%;border-collapse:collapse;margin-top:10px;}
@@ -1476,24 +1537,37 @@ ADMIN_HTML = '''
         .admin-status-bar a{color:#2563eb;text-decoration:none;margin-left:auto;}
         .token-status{color:#8c6d1f;font-size:14px;}
     </style>
-    <script type="text/javascript" src="https://webapi.amap.com/maps?v=2.0&key=6f17f9896974a8686929496921212479"></script>
+    {% if amap_web_key %}
+    <script type="text/javascript" src="https://webapi.amap.com/maps?v=2.0&key={{ amap_web_key }}"></script>
+    {% endif %}
 </head>
-<body>
-    <div class="box admin-status-bar">
+<body class="commercial-page admin-dashboard-page">
+    <div class="page-shell">
+    <nav class="modern-nav">
+        <div class="brand-lockup"><span class="brand-mark"></span><span>Web3 Nodes Store</span></div>
+        <div class="nav-actions"><a href="/">首页</a><a href="/admin/login" onclick="localStorage.removeItem('admin_token')">退出登录</a></div>
+    </nav>
+    <header class="page-hero">
+        <div>
+            <span class="page-kicker">服务端后台</span>
+            <h1>节点、文件与收益运营中心</h1>
+            <p>实时查看节点网络、文件存证、收益快照、邀请关系与提现审核，适合商业化运营和节点规模化扩展。</p>
+        </div>
+    </header>
+    <div class="box admin-status-bar commercial-card">
         <strong>服务端后台</strong>
         <span id="adminTokenStatus" class="token-status"></span>
         <span id="adminAutoRefreshStatus" class="token-status"></span>
-        <a href="/admin/login" onclick="localStorage.removeItem('admin_token')">退出登录</a>
     </div>
 
-    <div class="box">
+    <div class="box commercial-card">
         <h3>分成比例配置</h3>
         <input type="text" id="selfRatio" placeholder="上级分成比例" value="0.15">
         <input type="text" id="nodeRatio" placeholder="节点分成比例" value="0.85">
         <button onclick="setRatio()">保存配置</button>
     </div>
 
-    <div class="box">
+    <div class="box commercial-card">
         <h3>全网节点列表</h3>
         <button onclick="getNodes()">刷新节点数据</button>
         <table>
@@ -1513,13 +1587,14 @@ ADMIN_HTML = '''
         </table>
     </div>
 
-    <div class="box" style="min-height:600px;">
+    <div class="box commercial-card" style="min-height:600px;">
         <h3>🌍 全网节点全球地理分布地图</h3>
-        <p style="color:#888;font-size:14px;margin-bottom:15px;">实时在线节点打点｜离线节点灰色显示｜自动IP属地解析</p>
+        <p style="color:#64748b;font-size:14px;margin-bottom:15px;">实时在线节点打点｜离线节点灰色显示｜未配置 AMAP_WEB_KEY 时自动切换为节点分布看板</p>
         <div id="map" style="width:100%;height:500px;border-radius:8px;"></div>
+        <div id="nodeDistributionFallback" class="commercial-card" style="display:none;margin-top:12px;padding:14px;background:#f8fafc;"></div>
     </div>
 
-    <div class="box">
+    <div class="box commercial-card">
         <h3>收益结算记录</h3>
         <button onclick="getReward()">刷新收益数据</button>
         <table>
@@ -1538,7 +1613,7 @@ ADMIN_HTML = '''
         </table>
     </div>
 
-    <div class="box">
+    <div class="box commercial-card">
     <h3>📁 文件加密上链存证记录（分布式存储）</h3>
     <input id="fileSearch" placeholder="搜索文件名 / 哈希 / CID" style="min-width:260px">
     <button onclick="getFileList()">刷新存证数据</button>
@@ -1563,7 +1638,7 @@ ADMIN_HTML = '''
     </table>
     </div>
 
-    <div class="box">
+    <div class="box commercial-card">
         <h3>节点排行榜</h3>
         <button onclick="getLeaderboard()">刷新排行榜</button>
         <table>
@@ -1582,7 +1657,7 @@ ADMIN_HTML = '''
         </table>
     </div>
 
-    <div class="box">
+    <div class="box commercial-card">
         <h3>每日收益快照</h3>
         <button onclick="getDailyReward()">刷新每日收益</button>
         <table>
@@ -1600,13 +1675,15 @@ ADMIN_HTML = '''
         </table>
     </div>
 
-    <div class="box">
+    <div class="box commercial-card">
         <h3>邀请关系树</h3>
         <button onclick="getInviteTree()">刷新邀请关系</button>
         <pre id="inviteTreeBox" style="white-space:pre-wrap;background:#f8fafc;padding:12px;border-radius:6px;"></pre>
     </div>
 
+    </div>
 <script>
+const AMAP_WEB_KEY = "{{ amap_web_key }}";
 const ADMIN_REFRESH_INTERVAL_MS = 30000;
 let adminRefreshTimer = null;
 
@@ -1833,8 +1910,55 @@ function getIpfsStatus(){
 let map = null;
 let markerList = [];
 
+function escHtml(value){
+    return String(value == null ? "" : value).replace(/[&<>"']/g, (ch) => ({
+        "&":"&amp;","<":"&lt;",">":"&gt;","\\"":"&quot;","'":"&#39;"
+    }[ch]));
+}
+
+function renderNodeDistribution(nodes, message){
+    const fallback = document.getElementById("nodeDistributionFallback");
+    if(!fallback){ return; }
+    const safeNodes = nodes || [];
+    const onlineCount = safeNodes.filter((item) => Number(item.status) === 1).length;
+    const rows = safeNodes.slice(0, 30).map((item) => `
+        <tr>
+            <td>${escHtml(item.user_addr)}</td>
+            <td>${escHtml([item.country, item.province, item.city].filter(Boolean).join(" / ") || "未知")}</td>
+            <td>${Number(item.status) === 1 ? "在线" : "离线"}</td>
+            <td>${escHtml(item.lat)}, ${escHtml(item.lng)}</td>
+        </tr>
+    `).join("");
+    fallback.style.display = "block";
+    fallback.innerHTML = `
+        <strong>节点分布看板</strong>
+        <p style="color:#64748b;margin:8px 0 12px;">${escHtml(message || "地图服务未启用，已切换为列表视图。")} 节点 ${safeNodes.length} 个，在线 ${onlineCount} 个。</p>
+        <table>
+            <thead><tr><th>节点地址</th><th>地区</th><th>状态</th><th>经纬度</th></tr></thead>
+            <tbody>${rows || '<tr><td colspan="4">暂无节点地理数据</td></tr>'}</tbody>
+        </table>
+    `;
+}
+
+function renderMapFallback(message){
+    const mapBox = document.getElementById("map");
+    if(mapBox){
+        mapBox.innerHTML = `<div style="height:100%;display:flex;align-items:center;justify-content:center;text-align:center;padding:24px;background:#eef6f6;border:1px dashed #9ccfca;border-radius:8px;color:#155e63;">${escHtml(message)}</div>`;
+    }
+    renderNodeDistribution([], message);
+}
+
 function initMap(){
-    // 初始化地图，中心点中国
+    if(!AMAP_WEB_KEY){
+        renderMapFallback("未配置 AMAP_WEB_KEY，已关闭高德地图加载以避免 INVALID_USER_KEY。");
+        if(getAdminToken()){ loadNodeMap(); }
+        return;
+    }
+    if(typeof AMap === "undefined"){
+        renderMapFallback("地图 SDK 加载失败，已切换为节点分布看板。");
+        if(getAdminToken()){ loadNodeMap(); }
+        return;
+    }
     map = new AMap.Map('map', {
         zoom: 3,
         center: [105.27, 35.31]
@@ -1846,14 +1970,21 @@ function initMap(){
 
 // 加载节点点位
 function loadNodeMap(){
-    // 清空旧标记
-    markerList.forEach(m=>map.remove(m));
+    if(map){
+        markerList.forEach(m=>map.remove(m));
+    }
     markerList = [];
 
     adminFetch("/api/map_node_list")
     .then(res=>res.json())
     .then(data=>{
-        data.data.forEach(item=>{
+        const nodes = data.data || [];
+        if(!map || typeof AMap === "undefined"){
+            renderNodeDistribution(nodes, "地图未启用，当前展示节点地理分布列表。");
+            return;
+        }
+        renderNodeDistribution(nodes, "地图已启用，下方同步保留节点地理分布列表。");
+        nodes.forEach(item=>{
             let lat = parseFloat(item.lat);
             let lng = parseFloat(item.lng);
             if(lat===0 || lng===0) return;
@@ -1925,7 +2056,8 @@ USER_UPLOAD_HTML = '''
     <meta charset="UTF-8">
     <title>用户文件上传</title>
     <style>
-        body{font-family:Arial,"Microsoft YaHei",sans-serif;max-width:960px;margin:32px auto;padding:0 16px;background:#f7f8fb;color:#1f2937;}
+''' + COMMERCIAL_PAGE_CSS + '''
+        body{font-family:Arial,"Microsoft YaHei",sans-serif;}
         nav{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:18px;}
         a{color:#2563eb;text-decoration:none;}
         .panel{background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:18px;margin-bottom:16px;}
@@ -1940,14 +2072,22 @@ USER_UPLOAD_HTML = '''
         .linkbox{word-break:break-all;background:#ecfdf5;border:1px solid #bbf7d0;border-radius:8px;padding:12px;margin-top:12px;}
     </style>
 </head>
-<body>
-    <h1>用户文件上传</h1>
-    <nav>
-        <a href="/user/dashboard">用户面板</a>
-        <a href="/user/login">登录</a>
+<body class="commercial-page user-upload-page">
+    <div class="page-shell">
+    <nav class="modern-nav">
+        <div class="brand-lockup"><span class="brand-mark"></span><span>Web3 Nodes Store</span></div>
+        <div class="nav-actions"><a href="/">首页</a><a href="/user/dashboard">用户面板</a><a href="/user/login">登录</a></div>
     </nav>
+    <header class="page-hero">
+        <div>
+            <span class="page-kicker">文件产品</span>
+            <h1>上传文件并创建可控分享</h1>
+            <p>支持公开或私有存储，上传后可生成带提取码、过期时间和下载次数限制的商业化分享链接。</p>
+        </div>
+    </header>
     <div id="loginNotice" class="notice" hidden>未检测到登录 Token，请先登录后再上传。</div>
-    <section class="panel">
+    <div class="commercial-grid">
+    <section class="panel commercial-card">
         <form id="uploadForm">
             <label>选择文件
                 <input id="fileInput" name="file" type="file" required>
@@ -1961,7 +2101,7 @@ USER_UPLOAD_HTML = '''
             <button type="submit">上传文件</button>
         </form>
     </section>
-    <section class="panel">
+    <section class="panel commercial-card">
         <h2>创建分享</h2>
         <form id="shareForm">
             <label>文件哈希
@@ -1982,7 +2122,9 @@ USER_UPLOAD_HTML = '''
         </form>
         <div id="shareLinkBox" class="linkbox" hidden></div>
     </section>
+    </div>
     <pre id="resultBox" class="status">等待上传...</pre>
+    </div>
     <script>
     const token = localStorage.getItem("user_token") || "";
     const notice = document.getElementById("loginNotice");
@@ -2079,13 +2221,20 @@ USER_LOGIN_HTML = '''
     <meta charset="UTF-8">
     <title>用户登录</title>
     <style>
-        body{font-family:Arial,"Microsoft YaHei",sans-serif;max-width:760px;margin:32px auto;padding:0 16px;background:#f7f8fb;color:#1f2937;}
+''' + COMMERCIAL_PAGE_CSS + '''
+        body{font-family:Arial,"Microsoft YaHei",sans-serif;}
         nav{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:18px;}
         a{color:#2563eb;text-decoration:none;}
         .auth-shell{background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:18px;box-shadow:0 16px 36px rgba(15,23,42,.07);}
-        .tabs{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:18px;background:#f1f5f9;border-radius:8px;padding:6px;}
-        .tab{background:transparent;color:#334155;border:0;margin:0;border-radius:6px;}
-        .tab.active{background:#2563eb;color:white;}
+        .login-product-layout{display:grid;grid-template-columns:minmax(0,1fr) minmax(360px,.82fr);gap:20px;align-items:start;}
+        .login-value{padding:26px;}
+        .login-value h2{font-size:34px;line-height:1.15;margin:0 0 14px;}
+        .login-value p{color:#64748b;line-height:1.8;margin:0 0 16px;}
+        .value-list{display:grid;gap:10px;margin-top:18px;}
+        .value-list div{padding:12px;border-left:3px solid #20b486;background:#f8fafc;border-radius:7px;color:#35515a;}
+        .tabs{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:18px;background:linear-gradient(180deg,#eef6f6,#f8fafc);border:1px solid rgba(20,184,166,.18);border-radius:8px;padding:6px;}
+        .tab{background:rgba(255,255,255,.78)!important;color:#334155!important;border:1px solid rgba(15,118,110,.12)!important;margin:0;border-radius:7px!important;box-shadow:none!important;}
+        .tab.active{background:linear-gradient(135deg,#0f766e,#14b8a6 48%,#f0b429)!important;color:white!important;box-shadow:0 12px 28px rgba(20,184,166,.24)!important;}
         .panel{background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:18px;}
         .auth-panel{display:none;}
         .auth-panel.active{display:block;}
@@ -2098,13 +2247,31 @@ USER_LOGIN_HTML = '''
         .hint{color:#4b5563;font-size:14px;}
     </style>
 </head>
-<body>
-    <h1>用户登录</h1>
-    <nav>
-        <a href="/user/dashboard">用户面板</a>
-        <a href="/user/upload">上传文件</a>
+<body class="commercial-page user-login-page">
+    <div class="page-shell">
+    <nav class="modern-nav">
+        <div class="brand-lockup"><span class="brand-mark"></span><span>Web3 Nodes Store</span></div>
+        <div class="nav-actions"><a href="/">首页</a><a href="/user/dashboard">用户面板</a><a href="/user/upload">上传文件</a></div>
     </nav>
-    <div class="auth-shell">
+    <header class="page-hero">
+        <div>
+            <span class="page-kicker">用户中心</span>
+            <h1>进入你的文件分享与收益工作台</h1>
+            <p>账号、注册与钱包登录集中在一个页面，登录后即可上传文件、创建分享、查看积分和提现。</p>
+        </div>
+    </header>
+    <div class="login-product-layout">
+    <section class="login-value commercial-card">
+        <span class="page-kicker">商业化闭环</span>
+        <h2>从一次上传开始，连接分发、下载与收益</h2>
+        <p>适合私域资料分发、节点激励运营和文件商品化分享。用户登录后可以管理文件资产、分享链接与收益流水。</p>
+        <div class="value-list">
+            <div>可控分享：提取码、过期时间、下载次数限制。</div>
+            <div>收益记录：分享下载、节点贡献和积分流水统一追踪。</div>
+            <div>钱包能力：为后续链上身份和结算扩展保留入口。</div>
+        </div>
+    </section>
+    <div class="auth-shell commercial-card">
         <div class="tabs" role="tablist" aria-label="登录方式">
             <button type="button" class="tab active" data-auth-tab="login">账号登录</button>
             <button type="button" class="tab" data-auth-tab="register">注册账号</button>
@@ -2153,6 +2320,8 @@ USER_LOGIN_HTML = '''
         </section>
     </div>
     <pre id="statusBox" class="status">等待操作...</pre>
+    </div>
+    </div>
     <script>
     const statusBox = document.getElementById("statusBox");
     function showStatus(message){ statusBox.textContent = message; }
@@ -2237,7 +2406,8 @@ USER_DASHBOARD_HTML = '''
     <meta charset="UTF-8">
     <title>用户面板</title>
     <style>
-        body{font-family:Arial,"Microsoft YaHei",sans-serif;max-width:1180px;margin:28px auto;padding:0 16px;background:#f7f8fb;color:#1f2937;}
+''' + COMMERCIAL_PAGE_CSS + '''
+        body{font-family:Arial,"Microsoft YaHei",sans-serif;}
         nav{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:18px;}
         a{color:#2563eb;text-decoration:none;}
         .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px;}
@@ -2252,33 +2422,40 @@ USER_DASHBOARD_HTML = '''
         .wrap{word-break:break-all;}
     </style>
 </head>
-<body>
-    <h1>用户面板</h1>
-    <nav>
-        <a href="/user/upload">上传文件</a>
-        <a href="/user/login">登录</a>
+<body class="commercial-page user-dashboard-page">
+    <div class="page-shell">
+    <nav class="modern-nav">
+        <div class="brand-lockup"><span class="brand-mark"></span><span>Web3 Nodes Store</span></div>
+        <div class="nav-actions"><a href="/">首页</a><a href="/user/upload">上传文件</a><a href="/user/login">登录</a></div>
     </nav>
-    <section class="panel">
+    <header class="page-hero">
+        <div>
+            <span class="page-kicker">用户工作台</span>
+            <h1>文件资产、分享链接与收益总览</h1>
+            <p>集中查看账户、积分、收益、文件、分享和提现，适合作为面向客户的自助运营中心。</p>
+        </div>
+    </header>
+    <section class="panel commercial-card">
         <button id="refreshButton">刷新</button>
         <pre id="statusBox" class="status">正在读取 user_token...</pre>
     </section>
     <div class="grid">
-        <section class="panel">
+        <section class="panel commercial-card">
             <h2>账户</h2>
             <div id="accountBox"></div>
         </section>
-        <section class="panel">
+        <section class="panel commercial-card">
             <h2>收益</h2>
             <div class="metric" id="availableEarnings">0</div>
             <div id="earningsBox"></div>
         </section>
-        <section class="panel">
+        <section class="panel commercial-card">
             <h2>积分</h2>
             <div class="metric" id="totalPoints">0</div>
             <div id="pointsBox"></div>
         </section>
     </div>
-    <section class="panel">
+    <section class="panel commercial-card">
         <h2>钱包绑定</h2>
         <div class="grid">
             <input id="bindWalletAddress" placeholder="钱包地址 0x...">
@@ -2289,15 +2466,15 @@ USER_DASHBOARD_HTML = '''
         </div>
         <div id="bindMessage" class="wrap"></div>
     </section>
-    <section class="panel">
+    <section class="panel commercial-card">
         <h2>文件</h2>
         <div id="filesBox"></div>
     </section>
-    <section class="panel">
+    <section class="panel commercial-card">
         <h2>分享</h2>
         <div id="sharesBox"></div>
     </section>
-    <section class="panel">
+    <section class="panel commercial-card">
         <h2>提现</h2>
         <div class="grid">
             <input id="withdrawAmount" placeholder="提现金额">
@@ -2428,6 +2605,7 @@ USER_DASHBOARD_HTML = '''
     });
     refreshDashboard();
     </script>
+    </div>
 </body>
 </html>
 '''
@@ -2439,7 +2617,9 @@ PUBLIC_SHARE_HTML = '''
     <meta charset="UTF-8">
     <title>文件分享</title>
     <style>
-        body{font-family:Arial,"Microsoft YaHei",sans-serif;max-width:720px;margin:36px auto;padding:0 16px;background:#f7f8fb;color:#1f2937;}
+''' + COMMERCIAL_PAGE_CSS + '''
+        body{font-family:Arial,"Microsoft YaHei",sans-serif;}
+        .share-shell{width:min(820px,calc(100vw - 32px));margin:0 auto;padding:24px 0 48px;}
         .panel{background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:18px;margin-bottom:16px;}
         label{display:grid;gap:6px;font-weight:600;margin:12px 0;}
         input,button{font-size:15px;padding:10px;border:1px solid #d1d5db;border-radius:6px;}
@@ -2448,9 +2628,20 @@ PUBLIC_SHARE_HTML = '''
         .meta{line-height:1.8;word-break:break-all;}
     </style>
 </head>
-<body>
-    <h1>文件分享</h1>
-    <section class="panel" data-api-share="/api/share/{{ share_code }}">
+<body class="commercial-page public-share-page">
+    <div class="share-shell">
+    <nav class="modern-nav">
+        <div class="brand-lockup"><span class="brand-mark"></span><span>Web3 Nodes Store</span></div>
+        <div class="nav-actions"><a href="/">首页</a><a href="/user/login">用户登录</a></div>
+    </nav>
+    <header class="page-hero">
+        <div>
+            <span class="page-kicker">安全文件交付</span>
+            <h1>文件分享</h1>
+            <p>通过分享码获取文件信息，填写提取码后即可下载。下载行为会记录到分享与节点收益系统。</p>
+        </div>
+    </header>
+    <section class="panel commercial-card" data-api-share="/api/share/{{ share_code }}">
         <div id="shareMeta" class="meta">正在加载分享信息...</div>
         <label id="extractCodeLabel" hidden>提取码
             <input id="extractCodeInput" name="extract_code" autocomplete="off">
@@ -2458,6 +2649,7 @@ PUBLIC_SHARE_HTML = '''
         <button id="downloadButton">下载</button>
     </section>
     <pre id="statusBox" class="status">等待下载...</pre>
+    </div>
     <script>
     const shareCode = "{{ share_code }}";
     const statusBox = document.getElementById("statusBox");
@@ -2501,7 +2693,7 @@ def home_page():
 
 @app.route("/admin")
 def admin_index():
-    return render_template_string(ADMIN_HTML)
+    return render_template_string(ADMIN_HTML, amap_web_key=AMAP_WEB_KEY)
 
 
 @app.route("/admin/login")

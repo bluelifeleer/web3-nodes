@@ -29,6 +29,7 @@ ENV_KEYS = (
     "DB_PASSWORD",
     "DB_NAME",
     "WEB3_NODES_SKIP_DOTENV",
+    "AMAP_WEB_KEY",
 )
 
 
@@ -1231,6 +1232,60 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertIn('id="adminAutoRefreshStatus"', server_main.ADMIN_HTML)
         self.assertIn("setInterval(refreshAdminData", server_main.ADMIN_HTML)
         self.assertIn("getIpfsStatus();", server_main.ADMIN_HTML)
+
+    def test_admin_page_uses_configurable_map_key_with_fallback(self):
+        server_main = load_server_main(ADMIN_API_TOKEN="secret-token")
+        server_main.init_db = lambda: self.fail("admin dashboard shell should not require database")
+
+        response = server_main.app.test_client().get("/admin")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertNotIn("6f17f9896974a8686929496921212479", body)
+        self.assertNotIn("webapi.amap.com/maps?v=2.0&key=", body)
+        self.assertIn("AMAP_WEB_KEY", body)
+        self.assertIn("renderMapFallback", body)
+        self.assertIn('id="nodeDistributionFallback"', body)
+
+    def test_admin_page_loads_amap_only_when_key_is_configured(self):
+        server_main = load_server_main(ADMIN_API_TOKEN="secret-token", AMAP_WEB_KEY="valid-map-key")
+        server_main.init_db = lambda: self.fail("admin dashboard shell should not require database")
+
+        response = server_main.app.test_client().get("/admin")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("webapi.amap.com/maps?v=2.0&key=valid-map-key", body)
+
+    def test_main_pages_share_modern_commercial_shell(self):
+        server_main = load_server_main(ADMIN_API_TOKEN="secret-token", SESSION_SECRET="session-secret")
+        server_main.init_db = lambda: True
+        client = server_main.app.test_client()
+
+        for path in ("/", "/admin/login", "/admin", "/user/login", "/user/upload", "/user/dashboard", "/s/demo-share"):
+            response = client.get(path)
+            self.assertEqual(response.status_code, 200, path)
+            body = response.get_data(as_text=True)
+            self.assertIn("commercial-page", body, path)
+            self.assertIn("modern-nav", body, path)
+            self.assertIn("commercial-card", body, path)
+
+    def test_commercial_shell_uses_premium_button_system(self):
+        server_main = load_server_main(ADMIN_API_TOKEN="secret-token", SESSION_SECRET="session-secret")
+        server_main.init_db = lambda: True
+        client = server_main.app.test_client()
+
+        homepage = client.get("/").get_data(as_text=True)
+        admin = client.get("/admin").get_data(as_text=True)
+        admin_login = client.get("/admin/login").get_data(as_text=True)
+        login = client.get("/user/login").get_data(as_text=True)
+
+        self.assertEqual(homepage.count(":root{--ink"), 1)
+        for body in (homepage, admin, admin_login, login):
+            self.assertIn("premium-button", body)
+            self.assertIn("button-shine", body)
+            self.assertIn("hover-lift", body)
+            self.assertIn("linear-gradient(135deg,#0f766e,#14b8a6 48%,#f0b429)", body)
 
     def test_select_node_rows_uses_request_cursor_not_mutable_global_cursor(self):
         server_main = load_server_main(ADMIN_API_TOKEN="secret-token")

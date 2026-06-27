@@ -77,6 +77,7 @@ MAX_UPLOAD_MB=100
 - `ADMIN_API_TOKEN` 用于后台登录。
 - `SESSION_SECRET` 用于用户登录 Token。
 - `AES_KEY` 当前代码使用 AES，需要 16 字节字符串；自动生成时会生成可用长度。
+- `AMAP_WEB_KEY` 可选，用于后台节点地图；不配置时后台会自动降级为节点分布看板，避免地图 SDK 报 `INVALID_USER_KEY`。
 - 不要提交真实 `.env`，仓库已忽略 `.env`。
 
 ## 3. 数据库初始化
