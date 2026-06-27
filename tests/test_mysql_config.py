@@ -2140,15 +2140,17 @@ class MysqlConfigTest(unittest.TestCase):
             thread.start()
             connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=5)
             try:
-                connection.putrequest("GET", "/", skip_host=True)
-                connection.putheader("Host", f"attacker.example:{server.server_port}")
-                connection.endheaders()
+                for host in (f"attacker.example:{server.server_port}", "[::1]evil"):
+                    with self.subTest(host=host):
+                        connection.putrequest("GET", "/", skip_host=True)
+                        connection.putheader("Host", host)
+                        connection.endheaders()
 
-                response = connection.getresponse()
-                body = response.read().decode("utf-8")
+                        response = connection.getresponse()
+                        body = response.read().decode("utf-8")
 
-                self.assertEqual(response.status, 403)
-                self.assertNotIn(state["csrf_token"], body)
+                        self.assertEqual(response.status, 403)
+                        self.assertNotIn(state["csrf_token"], body)
             finally:
                 connection.close()
                 server.shutdown()
@@ -2229,6 +2231,8 @@ class MysqlConfigTest(unittest.TestCase):
                 ("Origin", "null"),
                 ("Origin", "attacker.example"),
                 ("Referer", "attacker.example/path"),
+                ("Origin", "http://[::1"),
+                ("Origin", "http://[::1]evil"),
             )
             for header_name, header_value in bad_headers:
                 with self.subTest(header_name=header_name, header_value=header_value):

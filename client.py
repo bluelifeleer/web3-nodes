@@ -276,7 +276,7 @@ def make_manage_handler(state):
             allowed_ports = {"", str(state.get("manage_port", "")), str(getattr(self.server, "server_port", ""))}
             if host == "::1":
                 return True
-            if host.startswith("[::1]"):
+            if host == "[::1]" or host.startswith("[::1]:"):
                 port = ""
                 if host.startswith("[::1]:"):
                     port = host[len("[::1]:"):]
@@ -290,7 +290,10 @@ def make_manage_handler(state):
         def _is_allowed_url_header(self, value):
             if not value:
                 return True
-            parsed = urlparse(value)
+            try:
+                parsed = urlparse(value)
+            except ValueError:
+                return False
             if parsed.scheme not in ("http", "https") or not parsed.netloc:
                 return False
             return self._is_allowed_host(parsed.netloc)
