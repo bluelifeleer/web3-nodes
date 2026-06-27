@@ -2752,8 +2752,89 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertEqual(response.status_code, 401)
         self.assertEqual(response.get_json()["code"], 401)
 
+    def test_node_me_maps_identity_fields_without_column_shift(self):
+        server_main = load_server_main()
+        identity_time = server_main.datetime(2026, 6, 27, 12, 3, 4)
+
+        class FakeCursor:
+            def __init__(self):
+                self.last_sql = ""
+
+            def execute(self, sql, params=None):
+                self.last_sql = sql
+
+            def fetchone(self):
+                if "from user_node" in self.last_sql.lower() and "join node_power" in self.last_sql.lower():
+                    return (
+                        "NODE_A",
+                        "INVITE1",
+                        "PARENT1",
+                        "MAC_A",
+                        512.0,
+                        128.0,
+                        42,
+                        8.5,
+                        identity_time,
+                        "/data/node-a",
+                        "ready",
+                        "none",
+                        600.0,
+                        256.0,
+                        344.0,
+                    )
+                return None
+
+        server_main.cursor = FakeCursor()
+        server_main.init_db = lambda: True
+
+        response = server_main.app.test_client().get(
+            "/api/node/me?user_addr=NODE_A&node_mac=MAC_A"
+        )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()["data"]
+        self.assertEqual(data["node_mac"], "MAC_A")
+        self.assertEqual(data["update_time"], str(identity_time))
+        self.assertEqual(data["storage_path"], "/data/node-a")
+        self.assertEqual(data["storage_status"], "ready")
+        self.assertEqual(data["storage_error"], "none")
+        self.assertEqual(data["storage_total_gb"], 600.0)
+        self.assertEqual(data["storage_used_gb"], 256.0)
+        self.assertEqual(data["storage_free_gb"], 344.0)
+
+    def test_calculate_node_earnings_reports_withdrawn_and_pending_breakdown(self):
+        server_main = load_server_main()
+
+        class FakeCursor:
+            def __init__(self):
+                self.last_sql = ""
+
+            def execute(self, sql, params=None):
+                self.last_sql = sql.lower()
+
+            def fetchone(self):
+                if "from node_reward" in self.last_sql:
+                    return (10,)
+                if "status='paid'" in self.last_sql:
+                    return (2,)
+                if "status in ('pending','approved')" in self.last_sql:
+                    return (1.5,)
+                return (0,)
+
+        server_main.cursor = FakeCursor()
+
+        summary = server_main.calculate_node_earnings("NODE_A")
+
+        self.assertEqual(summary["node_address"], "NODE_A")
+        self.assertEqual(summary["total_earnings"], 10.0)
+        self.assertEqual(summary["withdrawn_earnings"], 2.0)
+        self.assertEqual(summary["pending_withdrawals"], 1.5)
+        self.assertEqual(summary["locked_withdrawals"], 3.5)
+        self.assertEqual(summary["available_earnings"], 6.5)
+
     def test_node_withdrawal_create_inserts_node_request(self):
         server_main = load_server_main()
+        identity_time = server_main.datetime(2026, 6, 27, 12, 0, 0)
 
         class FakeCursor:
             def __init__(self):
@@ -2770,22 +2851,27 @@ class MysqlConfigTest(unittest.TestCase):
                     return (
                         "NODE_A",
                         "INVITE1",
-                        "",
+                        "PARENT1",
                         "MAC_A",
+                        512.0,
                         128.0,
                         42,
                         8.5,
-                        server_main.datetime(2026, 6, 27, 12, 0, 0),
+                        identity_time,
                         "/data/node-a",
                         "ready",
-                        "",
+                        "none",
                         256.0,
                         128.0,
                         128.0,
                     )
                 if "from node_reward" in lowered:
                     return (10,)
-                if "from withdrawal_request" in lowered:
+                if "status='paid'" in lowered:
+                    return (2,)
+                if "status in ('pending','approved')" in lowered:
+                    return (1.5,)
+                if "for update" in lowered:
                     return (0,)
                 return None
 
@@ -2811,6 +2897,10 @@ class MysqlConfigTest(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
+        response_data = response.get_json()["data"]
+        self.assertEqual(response_data["node_address"], "NODE_A")
+        self.assertEqual(response_data["wallet_address"], "0xnode-wallet")
+        self.assertEqual(response_data["withdrawal_account"], "0xnode-wallet")
         insert_queries = [
             params
             for sql, params in fake_cursor.executed
@@ -2822,6 +2912,27 @@ class MysqlConfigTest(unittest.TestCase):
             insert_queries[-1][1:],
             ("0xnode-wallet", "2.500000", "pending", "NODE_A", "wallet", "0xnode-wallet"),
         )
+        node_me = server_main.app.test_client().get(
+            "/api/node/me?user_addr=NODE_A&node_mac=MAC_A"
+        )
+        self.assertEqual(node_me.status_code, 200)
+        identity = node_me.get_json()["data"]
+        self.assertEqual(identity["node_mac"], "MAC_A")
+        self.assertEqual(identity["update_time"], str(identity_time))
+        self.assertEqual(identity["storage_path"], "/data/node-a")
+        self.assertEqual(identity["storage_status"], "ready")
+        self.assertEqual(identity["storage_error"], "none")
+        self.assertEqual(identity["storage_total_gb"], 256.0)
+        self.assertEqual(identity["storage_used_gb"], 128.0)
+        self.assertEqual(identity["storage_free_gb"], 128.0)
+        executed_sql = [sql.lower() for sql, _ in fake_cursor.executed]
+        lock_index = next(i for i, sql in enumerate(executed_sql) if "for update" in sql and "from user_node" in sql)
+        paid_index = next(i for i, sql in enumerate(executed_sql) if "from withdrawal_request" in sql and "status='paid'" in sql)
+        pending_index = next(i for i, sql in enumerate(executed_sql) if "from withdrawal_request" in sql and "status in ('pending','approved')" in sql)
+        insert_index = next(i for i, sql in enumerate(executed_sql) if sql.strip().startswith("insert into withdrawal_request"))
+        self.assertLess(lock_index, paid_index)
+        self.assertLess(lock_index, pending_index)
+        self.assertLess(lock_index, insert_index)
 
     def test_admin_withdrawals_requires_admin_token(self):
         server_main = load_server_main(ADMIN_API_TOKEN="secret-token")

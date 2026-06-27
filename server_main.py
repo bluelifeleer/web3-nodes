@@ -925,6 +925,24 @@ def select_node_identity_row(user_addr, node_mac):
     return current_cursor().fetchone()
 
 
+def lock_node_identity_for_update(user_addr, node_mac):
+    current_cursor().execute(
+        """
+        select un.user_address,un.invite_code,un.parent_invite_code,
+        np.node_mac,np.disk_total,np.disk_used,np.online_duration,np.upload_bandwidth,np.update_time,
+        np.storage_path,np.storage_status,np.storage_error,
+        np.storage_total_gb,np.storage_used_gb,np.storage_free_gb
+        from user_node un
+        join node_power np on un.user_address=np.user_address
+        where un.user_address=%s and np.node_mac=%s
+        limit 1
+        for update
+        """,
+        (user_addr, node_mac),
+    )
+    return current_cursor().fetchone()
+
+
 def format_node_identity_row(row):
     update_time = row[8] if len(row) > 8 else None
     disk_total = row[4] if len(row) > 4 and row[4] is not None else 0
@@ -1534,6 +1552,12 @@ def node_withdrawal_create():
 
     with DatabaseTransaction():
         try:
+            locked_row = lock_node_identity_for_update(identity["user_addr"], identity["node_mac"])
+            if not locked_row:
+                rollback_database()
+                return jsonify({"code":401,"msg":"节点身份校验失败"}), 401
+            identity = format_node_identity_row(locked_row)
+            g.current_node = identity
             summary = calculate_node_earnings(identity["user_addr"], include_decimal=True)
             if amount > summary["_available_earnings_decimal"]:
                 rollback_database()
