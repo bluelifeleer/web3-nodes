@@ -34,29 +34,463 @@ CLIENT_MANAGE_HTML = """
 <html lang="zh-CN">
 <head><meta charset="UTF-8"><title>节点控制台</title></head>
 <body>
+  <style>
+    :root {
+      color-scheme: light;
+      font-family: "Segoe UI", Arial, sans-serif;
+      background: #f4f7fb;
+      color: #14213d;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: linear-gradient(180deg, #f7f9fc 0%, #edf3fb 100%);
+      color: #14213d;
+    }
+    main {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 24px;
+    }
+    h1 {
+      margin: 0 0 10px;
+      font-size: 30px;
+    }
+    p.subhead {
+      margin: 0 0 24px;
+      color: #4f5d75;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 16px;
+    }
+    section {
+      background: #ffffff;
+      border: 1px solid #d8e2ef;
+      border-radius: 8px;
+      padding: 18px;
+      box-shadow: 0 10px 30px rgba(20, 33, 61, 0.06);
+    }
+    section.wide {
+      grid-column: 1 / -1;
+    }
+    h2 {
+      margin: 0 0 14px;
+      font-size: 18px;
+    }
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+    .stat {
+      border: 1px solid #e3e9f3;
+      border-radius: 8px;
+      padding: 12px;
+      background: #f9fbff;
+      min-height: 86px;
+    }
+    .label {
+      display: block;
+      font-size: 12px;
+      color: #6b7a90;
+      margin-bottom: 8px;
+    }
+    .value {
+      font-size: 22px;
+      font-weight: 600;
+      word-break: break-word;
+    }
+    .muted {
+      color: #6b7a90;
+      font-size: 13px;
+    }
+    .status-pill {
+      display: inline-block;
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-size: 13px;
+      font-weight: 600;
+      background: #d9f5e8;
+      color: #166534;
+    }
+    .status-pill.offline {
+      background: #fde2e1;
+      color: #b42318;
+    }
+    .toolbar, form {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+    }
+    input, select, button {
+      min-height: 40px;
+      border-radius: 8px;
+      border: 1px solid #c7d3e3;
+      padding: 0 12px;
+      font: inherit;
+    }
+    input, select {
+      flex: 1 1 180px;
+      background: #fff;
+    }
+    button {
+      cursor: pointer;
+      background: #1769ff;
+      color: #fff;
+      border: 0;
+      min-width: 120px;
+      font-weight: 600;
+    }
+    button.secondary {
+      background: #eef3fb;
+      color: #17325c;
+      border: 1px solid #c7d3e3;
+    }
+    button.danger {
+      background: #d92d20;
+    }
+    button:disabled {
+      opacity: 0.6;
+      cursor: wait;
+    }
+    .list {
+      margin: 14px 0 0;
+      padding: 0;
+      list-style: none;
+    }
+    .list li {
+      border-top: 1px solid #eef2f7;
+      padding: 12px 0;
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: flex-start;
+    }
+    .list li:first-child {
+      border-top: 0;
+      padding-top: 0;
+    }
+    .message {
+      min-height: 22px;
+      margin-top: 12px;
+      font-size: 14px;
+      color: #17325c;
+    }
+    .message.error {
+      color: #b42318;
+    }
+    .mono {
+      font-family: Consolas, "Courier New", monospace;
+      word-break: break-all;
+    }
+    @media (max-width: 720px) {
+      main { padding: 16px; }
+      h1 { font-size: 26px; }
+      .list li {
+        flex-direction: column;
+        align-items: stretch;
+      }
+      button {
+        width: 100%;
+      }
+    }
+  </style>
   <main>
     <h1>节点控制台</h1>
-    <section id="overview">运行状态 / 服务连接 / 最后心跳</section>
-    <section id="capacity">总容量 / 已使用 / 未使用 / 目录状态</section>
-    <section id="storage">添加目录 / 重新检测</section>
-    <section id="earnings">收益 / 提交提现 / 提现记录</section>
-    <section id="controls">停止节点 / 重启节点</section>
+    <p class="subhead">本地管理页只访问本机接口，不直接暴露服务端地址。</p>
+
+    <div class="grid">
+      <section>
+        <h2>运行概览</h2>
+        <div class="stats">
+          <div class="stat">
+            <span class="label">运行状态</span>
+            <div id="runningState" class="value">-</div>
+          </div>
+          <div class="stat">
+            <span class="label">服务端连接</span>
+            <div id="serverUrl" class="value muted mono">-</div>
+          </div>
+          <div class="stat">
+            <span class="label">最后心跳</span>
+            <div id="lastHeartbeat" class="value muted">-</div>
+          </div>
+          <div class="stat">
+            <span class="label">最近状态</span>
+            <div id="lastMessage" class="value muted">-</div>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <h2>目录健康与容量</h2>
+        <div class="stats">
+          <div class="stat">
+            <span class="label">目录状态</span>
+            <div id="storageState" class="value">-</div>
+          </div>
+          <div class="stat">
+            <span class="label">总容量</span>
+            <div id="storageTotal" class="value">-</div>
+          </div>
+          <div class="stat">
+            <span class="label">已使用</span>
+            <div id="storageUsed" class="value">-</div>
+          </div>
+          <div class="stat">
+            <span class="label">可用容量</span>
+            <div id="storageFree" class="value">-</div>
+          </div>
+        </div>
+        <div class="muted mono" id="storagePath">-</div>
+      </section>
+
+      <section class="wide">
+        <h2>存储目录管理</h2>
+        <form id="storageForm">
+          <input id="storageDirInput" name="storage_dir" placeholder="输入新的本地存储目录，例如 D:\\web3-node-data" />
+          <button type="submit">添加目录 / 更新目录</button>
+          <button class="secondary" id="refreshButton" type="button">重新检测</button>
+        </form>
+        <div id="storageMessage" class="message"></div>
+      </section>
+
+      <section>
+        <h2>收益概览</h2>
+        <div class="stats">
+          <div class="stat">
+            <span class="label">累计收益</span>
+            <div id="totalEarnings" class="value">-</div>
+          </div>
+          <div class="stat">
+            <span class="label">已提现</span>
+            <div id="withdrawnAmount" class="value">-</div>
+          </div>
+          <div class="stat">
+            <span class="label">审核中</span>
+            <div id="pendingAmount" class="value">-</div>
+          </div>
+          <div class="stat">
+            <span class="label">可提现</span>
+            <div id="availableAmount" class="value">-</div>
+          </div>
+        </div>
+        <div id="earningsMessage" class="message"></div>
+      </section>
+
+      <section>
+        <h2>提交提现</h2>
+        <form id="withdrawalForm">
+          <input id="withdrawalAmount" name="amount" placeholder="提现金额" />
+          <input id="walletAddress" name="wallet_address" placeholder="钱包地址" />
+          <select id="withdrawalChannel" name="withdrawal_channel">
+            <option value="wallet">wallet</option>
+            <option value="bank">bank</option>
+            <option value="alipay">alipay</option>
+          </select>
+          <input id="withdrawalAccount" name="withdrawal_account" placeholder="提现账号，默认等于钱包地址" />
+          <button type="submit">提交提现</button>
+        </form>
+        <div id="withdrawalMessage" class="message"></div>
+      </section>
+
+      <section class="wide">
+        <h2>提现记录</h2>
+        <ul id="withdrawalList" class="list">
+          <li><span class="muted">加载中...</span></li>
+        </ul>
+      </section>
+
+      <section class="wide">
+        <h2>控制操作</h2>
+        <div class="toolbar">
+          <button class="danger" id="stopButton" type="button">停止节点</button>
+          <button class="secondary" id="restartButton" type="button">重启节点</button>
+          <span id="controlState" class="status-pill">待加载</span>
+        </div>
+        <div id="controlMessage" class="message"></div>
+      </section>
+    </div>
   </main>
   <script>
     const CSRF_TOKEN = "__CSRF_TOKEN__";
-    const api = (path, options = {}) => {
+    const formatAmount = (value) => {
+      if (value === null || value === undefined || value === "") return "-";
+      return String(value);
+    };
+    const setMessage = (id, text, isError = false) => {
+      const node = document.getElementById(id);
+      node.textContent = text || "";
+      node.className = "message" + (isError ? " error" : "");
+    };
+    const api = async (path, options = {}) => {
       const opts = {...options};
       if (opts.method && opts.method.toUpperCase() !== "GET") {
         opts.headers = {...(opts.headers || {}), "Content-Type": "application/json", "X-CSRF-Token": CSRF_TOKEN};
         if (!opts.body) opts.body = "{}";
       }
-      return fetch(path, opts).then(res => res.json());
+      try {
+        const res = await fetch(path, opts);
+        const payload = await res.json().catch(() => ({ok:false, error:"响应解析失败"}));
+        if (!res.ok && payload && payload.ok === undefined) payload.ok = false;
+        return payload;
+      } catch (error) {
+        return {ok:false, error:error.message || "请求失败"};
+      }
     };
-    async function refreshAll(){
-      await Promise.all([api("/api/status"), api("/api/earnings"), api("/api/withdrawals")]);
+    const applyStatus = (payload) => {
+      if (!payload || !payload.ok) {
+        setMessage("controlMessage", payload && payload.error ? payload.error : "状态加载失败", true);
+        return;
+      }
+      const data = payload.data || {};
+      const storage = data.storage || {};
+      const isRunning = !!data.running;
+      document.getElementById("runningState").textContent = isRunning ? "运行中" : "已停止";
+      document.getElementById("serverUrl").textContent = data.server_url ? "本地代理已配置" : "-";
+      document.getElementById("lastHeartbeat").textContent = data.last_heartbeat || "-";
+      document.getElementById("lastMessage").textContent = data.last_notice || data.last_error || "-";
+      document.getElementById("storageState").textContent = storage.storage_status || "-";
+      document.getElementById("storageTotal").textContent = formatAmount(storage.storage_total_gb) + " GB";
+      document.getElementById("storageUsed").textContent = formatAmount(storage.storage_used_gb) + " GB";
+      document.getElementById("storageFree").textContent = formatAmount(storage.storage_free_gb) + " GB";
+      document.getElementById("storagePath").textContent = storage.storage_path || data.storage_dir || "-";
+      document.getElementById("storageDirInput").value = data.storage_dir || "";
+      const pill = document.getElementById("controlState");
+      pill.textContent = isRunning ? "运行中" : "已停止";
+      pill.className = "status-pill" + (isRunning ? "" : " offline");
+      document.getElementById("stopButton").disabled = !isRunning;
+    };
+    const applyEarnings = (payload) => {
+      if (!payload || !payload.ok) {
+        setMessage("earningsMessage", payload && payload.error ? payload.error : "收益加载失败", true);
+        return;
+      }
+      const data = payload.data || {};
+      document.getElementById("totalEarnings").textContent = formatAmount(data.total_amount || data.total_earnings || data.total_income || "0");
+      document.getElementById("withdrawnAmount").textContent = formatAmount(data.withdrawn_amount || data.withdrawn_earnings || "0");
+      document.getElementById("pendingAmount").textContent = formatAmount(data.pending_amount || data.pending_withdrawals || "0");
+      document.getElementById("availableAmount").textContent = formatAmount(data.available_amount || data.available_earnings || "0");
+      setMessage("earningsMessage", payload.message || "收益数据已更新");
+    };
+    const applyWithdrawals = (payload) => {
+      const list = document.getElementById("withdrawalList");
+      list.innerHTML = "";
+      if (!payload || !payload.ok) {
+        setMessage("withdrawalMessage", payload && payload.error ? payload.error : "提现记录加载失败", true);
+        list.innerHTML = '<li><span class="muted">暂时无法读取提现记录</span></li>';
+        return;
+      }
+      const rows = Array.isArray(payload.data) ? payload.data : (payload.data && payload.data.items) || [];
+      if (!rows.length) {
+        list.innerHTML = '<li><span class="muted">暂无提现记录</span></li>';
+      } else {
+        for (const item of rows) {
+          const li = document.createElement("li");
+          const left = document.createElement("div");
+          const amount = document.createElement("strong");
+          amount.textContent = formatAmount(item.amount);
+          const wallet = document.createElement("div");
+          wallet.className = "muted mono";
+          wallet.textContent = item.wallet_address || item.withdrawal_account || "-";
+          left.appendChild(amount);
+          left.appendChild(wallet);
+          const right = document.createElement("div");
+          const status = document.createElement("div");
+          status.textContent = item.status || "-";
+          const created = document.createElement("div");
+          created.className = "muted";
+          created.textContent = item.created_at || item.created_time || "";
+          right.appendChild(status);
+          right.appendChild(created);
+          li.appendChild(left);
+          li.appendChild(right);
+          list.appendChild(li);
+        }
+      }
+      setMessage("withdrawalMessage", payload.message || "提现记录已更新");
+    };
+    async function refreshStatus() {
+      applyStatus(await api("/api/status"));
     }
-    async function stopNode(){ if(confirm("确认停止节点？")) await api("/api/control/stop", {method:"POST"}); }
-    async function restartNode(){ if(confirm("确认重启节点？")) await api("/api/control/restart", {method:"POST"}); }
+    async function refreshEarnings() {
+      applyEarnings(await api("/api/earnings"));
+    }
+    async function refreshWithdrawals() {
+      applyWithdrawals(await api("/api/withdrawals"));
+    }
+    async function refreshAll(){
+      await Promise.all([refreshStatus(), refreshEarnings(), refreshWithdrawals()]);
+    }
+    async function updateStorage(event){
+      event.preventDefault();
+      const storageDir = document.getElementById("storageDirInput").value.trim();
+      const payload = await api("/api/storage", {method:"POST", body: JSON.stringify({storage_dir: storageDir})});
+      if (payload.ok) {
+        applyStatus(payload);
+        setMessage("storageMessage", "存储目录已更新并重新检测");
+      } else {
+        setMessage("storageMessage", payload.error || "存储目录更新失败", true);
+      }
+    }
+    async function recheckStorage(){
+      const payload = await api("/api/refresh", {method:"POST", body:"{}"});
+      if (payload.ok) {
+        applyStatus(payload);
+        setMessage("storageMessage", "已重新检测本地目录");
+      } else {
+        setMessage("storageMessage", payload.error || "重新检测失败", true);
+      }
+    }
+    async function submitWithdrawal(event){
+      event.preventDefault();
+      const walletAddress = document.getElementById("walletAddress").value.trim();
+      const channel = document.getElementById("withdrawalChannel").value.trim() || "wallet";
+      const accountInput = document.getElementById("withdrawalAccount").value.trim();
+      const payload = await api("/api/withdrawals", {
+        method:"POST",
+        body: JSON.stringify({
+          amount: document.getElementById("withdrawalAmount").value.trim(),
+          wallet_address: walletAddress,
+          withdrawal_channel: channel,
+          withdrawal_account: accountInput || walletAddress
+        })
+      });
+      if (payload.ok) {
+        setMessage("withdrawalMessage", payload.message || "提现申请已提交");
+        await Promise.all([refreshEarnings(), refreshWithdrawals()]);
+      } else {
+        setMessage("withdrawalMessage", payload.error || "提现申请失败", true);
+      }
+    }
+    async function stopNode(){
+      if (!confirm("确认停止节点？")) return;
+      const payload = await api("/api/control/stop", {method:"POST", body:"{}"});
+      if (payload.ok) {
+        setMessage("controlMessage", payload.message || "节点停止请求已提交");
+        applyStatus(payload);
+      } else {
+        setMessage("controlMessage", payload.error || "停止节点失败", true);
+      }
+    }
+    async function restartNode(){
+      if (!confirm("确认重启节点？")) return;
+      const payload = await api("/api/control/restart", {method:"POST", body:"{}"});
+      setMessage("controlMessage", payload.message || payload.error || "重启请求已处理", !payload.ok);
+      if (payload.data) applyStatus(payload);
+    }
+    window.addEventListener("load", () => {
+      document.getElementById("storageForm").addEventListener("submit", updateStorage);
+      document.getElementById("refreshButton").addEventListener("click", recheckStorage);
+      document.getElementById("withdrawalForm").addEventListener("submit", submitWithdrawal);
+      document.getElementById("stopButton").addEventListener("click", stopNode);
+      document.getElementById("restartButton").addEventListener("click", restartNode);
+      refreshAll();
+    });
   </script>
 </body>
 </html>
@@ -206,8 +640,10 @@ def create_client_state(server_url, user_addr, node_mac, storage_dir, manage_por
         "manage_port": manage_port,
         "csrf_token": secrets.token_urlsafe(24),
         "running": True,
+        "shutdown_requested": False,
         "last_heartbeat": "",
         "last_error": "",
+        "last_notice": "",
         "storage": inspect_storage_dir(storage_dir),
     }
 
@@ -218,8 +654,11 @@ def client_status_payload(state):
         "user_addr": state["user_addr"],
         "node_mac": state["node_mac"],
         "running": state["running"],
+        "shutdown_requested": state.get("shutdown_requested", False),
         "last_heartbeat": state["last_heartbeat"],
         "last_error": state["last_error"],
+        "last_notice": state.get("last_notice", ""),
+        "storage_dir": state["storage_dir"],
         "storage": state["storage"],
     }
 
@@ -245,12 +684,108 @@ def ensure_success_response(response):
         raise RuntimeError(f"heartbeat failed with HTTP {status_code}")
 
 
+def build_node_identity_payload(state):
+    return {
+        "user_addr": state["user_addr"],
+        "node_mac": state["node_mac"],
+    }
+
+
+def normalize_proxy_response(response):
+    status_code = int(getattr(response, "status_code", 200) or 200)
+    try:
+        payload = response.json()
+    except Exception:
+        payload = None
+    if isinstance(payload, dict):
+        result = dict(payload)
+    elif payload is None:
+        result = {"ok": status_code < 400, "data": None}
+    else:
+        result = {"ok": status_code < 400, "data": payload}
+    if "ok" not in result and "code" in result:
+        try:
+            result["ok"] = int(result.get("code") or 0) == 200 and status_code < 400
+        except (TypeError, ValueError):
+            result["ok"] = status_code < 400
+    if "error" not in result and result.get("msg") and not result.get("ok", status_code < 400):
+        result["error"] = result.get("msg")
+    if status_code >= 400 and "ok" not in result:
+        result["ok"] = False
+    return status_code, result
+
+
+def proxy_node_get(state, endpoint, get_func=None):
+    if get_func is None:
+        get_func = requests.get
+    try:
+        response = get_func(
+            f"{state['server_url']}{endpoint}",
+            params=build_node_identity_payload(state),
+            timeout=10,
+        )
+        return normalize_proxy_response(response)
+    except Exception as exc:
+        return 502, {"ok": False, "error": f"服务端不可达：{exc}"}
+
+
+def build_withdrawal_request_payload(state, data):
+    wallet_address = str(data.get("wallet_address") or "").strip()
+    withdrawal_channel = str(data.get("withdrawal_channel") or "wallet").strip() or "wallet"
+    withdrawal_account = str(data.get("withdrawal_account") or wallet_address).strip() or wallet_address
+    payload = build_node_identity_payload(state)
+    payload.update(
+        {
+            "amount": data.get("amount"),
+            "wallet_address": wallet_address,
+            "withdrawal_channel": withdrawal_channel,
+            "withdrawal_account": withdrawal_account,
+        }
+    )
+    return payload
+
+
+def proxy_node_withdrawal_create(state, data, post_func=None):
+    if post_func is None:
+        post_func = requests.post
+    try:
+        response = post_func(
+            f"{state['server_url']}/api/node/withdrawals",
+            json=build_withdrawal_request_payload(state, data),
+            timeout=10,
+        )
+        return normalize_proxy_response(response)
+    except Exception as exc:
+        return 502, {"ok": False, "error": f"服务端不可达：{exc}"}
+
+
+def stop_client_from_console(state):
+    state["running"] = False
+    state["shutdown_requested"] = True
+    state["last_notice"] = "已从本地控制台请求停止节点"
+    return {
+        "ok": True,
+        "message": "已停止节点心跳循环；开发模式不会直接退出当前进程",
+        "data": client_status_payload(state),
+    }
+
+
+def restart_client_from_console(state):
+    state["last_notice"] = "开发模式暂不支持自动重启，请手动重新运行 client.py"
+    return {
+        "ok": True,
+        "message": "开发模式暂不支持自动重启，请手动重新运行 client.py",
+        "data": client_status_payload(state),
+    }
+
+
 def report_heartbeat(state, upload_bw, post_func=requests.post):
     payload = build_heartbeat_payload(state, upload_bw)
     try:
         response = post_func(f"{state['server_url']}/heartbeat", json=payload, timeout=10)
         ensure_success_response(response)
         state["running"] = True
+        state["last_notice"] = ""
         state["last_heartbeat"] = time.strftime("%Y-%m-%d %H:%M:%S")
         state["last_error"] = ""
         return True, payload
@@ -374,9 +909,11 @@ def make_manage_handler(state):
             elif path == "/api/status":
                 self._send_json({"ok": True, "data": client_status_payload(state)})
             elif path == "/api/earnings":
-                self._send_json({"ok": True, "data": [], "message": "收益接口将在后续任务完成"})
+                status_code, payload = proxy_node_get(state, "/api/node/earnings")
+                self._send_json(payload, status=status_code)
             elif path == "/api/withdrawals":
-                self._send_json({"ok": True, "data": [], "message": "提现接口将在后续任务完成"})
+                status_code, payload = proxy_node_get(state, "/api/node/withdrawals")
+                self._send_json(payload, status=status_code)
             else:
                 self._send_json({"ok": False, "error": "not found"}, status=404)
 
@@ -397,11 +934,12 @@ def make_manage_handler(state):
                 state["storage"] = inspect_storage_dir(state["storage_dir"])
                 self._send_json({"ok": True, "data": client_status_payload(state)})
             elif path == "/api/control/stop":
-                self._send_json({"ok": True, "message": "停止节点将在后续任务完成"})
+                self._send_json(stop_client_from_console(state))
             elif path == "/api/control/restart":
-                self._send_json({"ok": True, "message": "重启节点将在后续任务完成"})
+                self._send_json(restart_client_from_console(state))
             elif path == "/api/withdrawals":
-                self._send_json({"ok": True, "message": "提交提现将在后续任务完成"})
+                status_code, payload = proxy_node_withdrawal_create(state, data)
+                self._send_json(payload, status=status_code)
             else:
                 self._send_json({"ok": False, "error": "not found"}, status=404)
 
@@ -456,9 +994,13 @@ def wait_for_registration(
     post_func=requests.post,
     sleep_func=time.sleep,
     max_attempts=None,
+    state=None,
 ):
     attempts = 0
     while True:
+        if state is not None and state.get("shutdown_requested"):
+            safe_print("ℹ️ 节点停止请求已收到，取消注册重试")
+            return False
         attempts += 1
         try:
             register_node(server_url, user_addr, device_mac, parent_invite, post_func=post_func)
@@ -467,6 +1009,9 @@ def wait_for_registration(
         except Exception:
             safe_print(f"❌ 服务端连接失败，{reconnect_interval}秒后自动重连...")
             if max_attempts is not None and attempts >= max_attempts:
+                return False
+            if state is not None and state.get("shutdown_requested"):
+                safe_print("ℹ️ 节点停止请求已收到，取消注册重试")
                 return False
             sleep_func(reconnect_interval)
 
@@ -502,11 +1047,12 @@ def client_run():
             device_mac,
             PARENT_INVITE,
             reconnect_interval=reconnect_interval,
+            state=state,
         )
 
         # 2. 循环心跳上报（60秒一次）
         safe_print("🔄 节点持续运行中，实时上报存储数据...")
-        while True:
+        while not state.get("shutdown_requested"):
             upload_bw = round(random.uniform(0.2,3.0),2)
             heartbeat_ok, payload = report_heartbeat(state, upload_bw)
             if heartbeat_ok:

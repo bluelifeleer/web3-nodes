@@ -1680,6 +1680,206 @@ class MysqlConfigTest(unittest.TestCase):
             else:
                 sys.modules["webview"] = old_webview
 
+    def test_client_console_calls_node_earnings_and_withdrawal_apis(self):
+        old_requests = sys.modules.get("requests")
+        old_webview = sys.modules.get("webview")
+
+        class FakeResponse:
+            def __init__(self, payload, status_code=200):
+                self._payload = payload
+                self.status_code = status_code
+
+            def raise_for_status(self):
+                if self.status_code >= 400:
+                    raise RuntimeError(f"http {self.status_code}")
+
+            def json(self):
+                return self._payload
+
+        try:
+            sys.modules["requests"] = types.SimpleNamespace(post=lambda *args, **kwargs: None, get=lambda *args, **kwargs: None)
+            sys.modules["webview"] = None
+            sys.modules.pop("client", None)
+            client_module = importlib.import_module("client")
+            html = client_module.CLIENT_MANAGE_HTML
+            for marker in ("/api/earnings", "/api/withdrawals", "/api/control/stop", "/api/control/restart"):
+                self.assertIn(marker, html)
+
+            get_calls = []
+            post_calls = []
+
+            def fake_get(url, params=None, timeout=10):
+                get_calls.append((url, params, timeout))
+                if url.endswith("/api/node/earnings"):
+                    return FakeResponse({"code": 200, "data": {"available_earnings": "12.50", "withdrawn_earnings": "3.00"}})
+                if url.endswith("/api/node/withdrawals"):
+                    return FakeResponse({"code": 200, "data": [{"id": 7, "amount": "5.00", "status": "pending"}]})
+                raise AssertionError(f"unexpected GET {url}")
+
+            def fake_post(url, json=None, timeout=10):
+                post_calls.append((url, json, timeout))
+                if url.endswith("/api/node/withdrawals"):
+                    return FakeResponse({"code": 200, "data": {"id": 9, "status": "pending", "amount": json["amount"]}})
+                raise AssertionError(f"unexpected POST {url}")
+
+            client_module.requests = types.SimpleNamespace(get=fake_get, post=fake_post)
+            client_module.inspect_storage_dir = lambda storage_dir: {
+                "storage_path": storage_dir,
+                "storage_status": "ok",
+                "storage_total_gb": 100,
+                "storage_used_gb": 20,
+                "storage_free_gb": 80,
+            }
+            state = client_module.create_client_state("http://server.example", "NODE_A", "MAC_A", "D:/node", 8787)
+            server = client_module.ThreadingHTTPServer(
+                ("127.0.0.1", 0),
+                client_module.make_manage_handler(state),
+            )
+            thread = client_module.threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            base_url = f"http://127.0.0.1:{server.server_port}"
+            try:
+                with urllib.request.urlopen(f"{base_url}/api/earnings", timeout=5) as response:
+                    earnings_payload = json.loads(response.read().decode("utf-8"))
+                self.assertTrue(earnings_payload["ok"])
+                self.assertEqual(earnings_payload["data"]["available_earnings"], "12.50")
+
+                with urllib.request.urlopen(f"{base_url}/api/withdrawals", timeout=5) as response:
+                    withdrawals_payload = json.loads(response.read().decode("utf-8"))
+                self.assertTrue(withdrawals_payload["ok"])
+                self.assertEqual(withdrawals_payload["data"][0]["id"], 7)
+
+                withdrawal_request = urllib.request.Request(
+                    f"{base_url}/api/withdrawals",
+                    data=json.dumps(
+                        {
+                            "amount": "5.00",
+                            "wallet_address": "0xabc",
+                            "withdrawal_channel": "bank",
+                            "withdrawal_account": "acct-1",
+                        }
+                    ).encode("utf-8"),
+                    headers={"Content-Type": "application/json", "X-CSRF-Token": state["csrf_token"]},
+                    method="POST",
+                )
+                with urllib.request.urlopen(withdrawal_request, timeout=5) as response:
+                    create_payload = json.loads(response.read().decode("utf-8"))
+                self.assertTrue(create_payload["ok"])
+                self.assertEqual(create_payload["data"]["id"], 9)
+
+                missing_token = urllib.request.Request(
+                    f"{base_url}/api/withdrawals",
+                    data=json.dumps({"amount": "1.00", "wallet_address": "0xdef"}).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with self.assertRaises(urllib.error.HTTPError) as missing_token_error:
+                    urllib.request.urlopen(missing_token, timeout=5)
+                self.assertEqual(missing_token_error.exception.code, 403)
+                missing_token_error.exception.read()
+                missing_token_error.exception.close()
+
+                bad_content_type = urllib.request.Request(
+                    f"{base_url}/api/withdrawals",
+                    data=b"amount=1.00",
+                    headers={"Content-Type": "text/plain", "X-CSRF-Token": state["csrf_token"]},
+                    method="POST",
+                )
+                with self.assertRaises(urllib.error.HTTPError) as bad_type_error:
+                    urllib.request.urlopen(bad_content_type, timeout=5)
+                self.assertEqual(bad_type_error.exception.code, 400)
+                bad_type_error.exception.read()
+                bad_type_error.exception.close()
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
+            self.assertEqual(
+                get_calls,
+                [
+                    ("http://server.example/api/node/earnings", {"user_addr": "NODE_A", "node_mac": "MAC_A"}, 10),
+                    ("http://server.example/api/node/withdrawals", {"user_addr": "NODE_A", "node_mac": "MAC_A"}, 10),
+                ],
+            )
+            self.assertEqual(len(post_calls), 1)
+            self.assertEqual(post_calls[0][0], "http://server.example/api/node/withdrawals")
+            self.assertEqual(
+                post_calls[0][1],
+                {
+                    "user_addr": "NODE_A",
+                    "node_mac": "MAC_A",
+                    "amount": "5.00",
+                    "wallet_address": "0xabc",
+                    "withdrawal_channel": "bank",
+                    "withdrawal_account": "acct-1",
+                },
+            )
+        finally:
+            sys.modules.pop("client", None)
+            if old_requests is None:
+                sys.modules.pop("requests", None)
+            else:
+                sys.modules["requests"] = old_requests
+            if old_webview is None:
+                sys.modules.pop("webview", None)
+            else:
+                sys.modules["webview"] = old_webview
+
+    def test_client_console_stop_and_restart_controls_are_safe_in_dev(self):
+        old_requests = sys.modules.get("requests")
+        old_webview = sys.modules.get("webview")
+        try:
+            sys.modules["requests"] = types.SimpleNamespace(post=lambda *args, **kwargs: None, get=lambda *args, **kwargs: None)
+            sys.modules["webview"] = None
+            sys.modules.pop("client", None)
+            client_module = importlib.import_module("client")
+            state = client_module.create_client_state("http://server", "NODE_A", "MAC_A", "D:/node", 8787)
+            server = client_module.ThreadingHTTPServer(
+                ("127.0.0.1", 0),
+                client_module.make_manage_handler(state),
+            )
+            thread = client_module.threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            base_url = f"http://127.0.0.1:{server.server_port}"
+            try:
+                stop_request = urllib.request.Request(
+                    f"{base_url}/api/control/stop",
+                    data=b"{}",
+                    headers={"Content-Type": "application/json", "X-CSRF-Token": state["csrf_token"]},
+                    method="POST",
+                )
+                with urllib.request.urlopen(stop_request, timeout=5) as response:
+                    stop_payload = json.loads(response.read().decode("utf-8"))
+                self.assertTrue(stop_payload["ok"])
+                self.assertFalse(state["running"])
+
+                restart_request = urllib.request.Request(
+                    f"{base_url}/api/control/restart",
+                    data=b"{}",
+                    headers={"Content-Type": "application/json", "X-CSRF-Token": state["csrf_token"]},
+                    method="POST",
+                )
+                with urllib.request.urlopen(restart_request, timeout=5) as response:
+                    restart_payload = json.loads(response.read().decode("utf-8"))
+                self.assertTrue(restart_payload["ok"])
+                self.assertIn("开发模式暂不支持自动重启", restart_payload["message"])
+                self.assertFalse(state["running"])
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+        finally:
+            sys.modules.pop("client", None)
+            if old_requests is None:
+                sys.modules.pop("requests", None)
+            else:
+                sys.modules["requests"] = old_requests
+            if old_webview is None:
+                sys.modules.pop("webview", None)
+            else:
+                sys.modules["webview"] = old_webview
+
     def test_client_console_status_payload_includes_capacity(self):
         old_requests = sys.modules.get("requests")
         old_webview = sys.modules.get("webview")
