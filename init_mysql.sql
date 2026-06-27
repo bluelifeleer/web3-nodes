@@ -157,13 +157,16 @@ CREATE TABLE IF NOT EXISTS `point_ledger` (
 
 CREATE TABLE IF NOT EXISTS `withdrawal_request` (
   `id` int NOT NULL AUTO_INCREMENT,
-  `user_id` int NOT NULL,
+  `user_id` int DEFAULT NULL,
   `wallet_address` varchar(128) NOT NULL,
   `amount` decimal(18,6) NOT NULL,
   `status` varchar(16) DEFAULT 'pending',
   `admin_note` varchar(255) DEFAULT '',
   `created_at` datetime DEFAULT CURRENT_TIMESTAMP,
   `reviewed_at` datetime DEFAULT NULL,
+  `node_address` varchar(128) DEFAULT '',
+  `withdrawal_channel` varchar(32) DEFAULT 'wallet',
+  `withdrawal_account` varchar(128) DEFAULT '',
   PRIMARY KEY (`id`),
   KEY `idx_withdrawal_user` (`user_id`),
   KEY `idx_withdrawal_status` (`status`)

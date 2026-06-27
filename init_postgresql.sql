@@ -139,13 +139,16 @@ CREATE TABLE IF NOT EXISTS point_ledger (
 
 CREATE TABLE IF NOT EXISTS withdrawal_request (
     id SERIAL PRIMARY KEY,
-    user_id integer NOT NULL,
+    user_id integer DEFAULT NULL,
     wallet_address varchar(128) NOT NULL,
     amount numeric(18,6) NOT NULL,
     status varchar(16) DEFAULT 'pending',
     admin_note varchar(255) DEFAULT '',
     created_at timestamp DEFAULT CURRENT_TIMESTAMP,
-    reviewed_at timestamp DEFAULT NULL
+    reviewed_at timestamp DEFAULT NULL,
+    node_address varchar(128) DEFAULT '',
+    withdrawal_channel varchar(32) DEFAULT 'wallet',
+    withdrawal_account varchar(128) DEFAULT ''
 );
 
 CREATE INDEX IF NOT EXISTS idx_wallet_nonce_address ON wallet_nonce (wallet_address);

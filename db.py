@@ -212,13 +212,16 @@ USER_PRODUCT_MYSQL_TABLES = [
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4""",
     """CREATE TABLE IF NOT EXISTS `withdrawal_request` (
   `id` int NOT NULL AUTO_INCREMENT,
-  `user_id` int NOT NULL,
+  `user_id` int DEFAULT NULL,
   `wallet_address` varchar(128) NOT NULL,
   `amount` decimal(18,6) NOT NULL,
   `status` varchar(16) DEFAULT 'pending',
   `admin_note` varchar(255) DEFAULT '',
   `created_at` datetime DEFAULT CURRENT_TIMESTAMP,
   `reviewed_at` datetime DEFAULT NULL,
+  `node_address` varchar(128) DEFAULT '',
+  `withdrawal_channel` varchar(32) DEFAULT 'wallet',
+  `withdrawal_account` varchar(128) DEFAULT '',
   PRIMARY KEY (`id`),
   KEY `idx_withdrawal_user` (`user_id`),
   KEY `idx_withdrawal_status` (`status`)
@@ -280,13 +283,16 @@ USER_PRODUCT_POSTGRESQL_TABLES = [
 )""",
     """CREATE TABLE IF NOT EXISTS withdrawal_request (
     id SERIAL PRIMARY KEY,
-    user_id integer NOT NULL,
+    user_id integer DEFAULT NULL,
     wallet_address varchar(128) NOT NULL,
     amount numeric(18,6) NOT NULL,
     status varchar(16) DEFAULT 'pending',
     admin_note varchar(255) DEFAULT '',
     created_at timestamp DEFAULT CURRENT_TIMESTAMP,
-    reviewed_at timestamp DEFAULT NULL
+    reviewed_at timestamp DEFAULT NULL,
+    node_address varchar(128) DEFAULT '',
+    withdrawal_channel varchar(32) DEFAULT 'wallet',
+    withdrawal_account varchar(128) DEFAULT ''
 )""",
 ]
 
@@ -317,6 +323,10 @@ SCHEMA_MIGRATIONS = [
     "CREATE INDEX idx_download_share ON file_download_log (share_code)",
     "CREATE INDEX idx_point_user ON point_ledger (user_id)",
     "CREATE INDEX idx_point_wallet ON point_ledger (wallet_address)",
+    "ALTER TABLE withdrawal_request MODIFY COLUMN user_id int DEFAULT NULL",
+    "ALTER TABLE withdrawal_request ADD COLUMN node_address varchar(128) DEFAULT ''",
+    "ALTER TABLE withdrawal_request ADD COLUMN withdrawal_channel varchar(32) DEFAULT 'wallet'",
+    "ALTER TABLE withdrawal_request ADD COLUMN withdrawal_account varchar(128) DEFAULT ''",
     "CREATE INDEX idx_withdrawal_user ON withdrawal_request (user_id)",
     "CREATE INDEX idx_withdrawal_status ON withdrawal_request (status)",
 ]
@@ -348,6 +358,10 @@ POSTGRES_SCHEMA_MIGRATIONS = [
     "CREATE INDEX IF NOT EXISTS idx_download_share ON file_download_log (share_code)",
     "CREATE INDEX IF NOT EXISTS idx_point_user ON point_ledger (user_id)",
     "CREATE INDEX IF NOT EXISTS idx_point_wallet ON point_ledger (wallet_address)",
+    "ALTER TABLE withdrawal_request ALTER COLUMN user_id DROP NOT NULL",
+    "ALTER TABLE withdrawal_request ADD COLUMN IF NOT EXISTS node_address varchar(128) DEFAULT ''",
+    "ALTER TABLE withdrawal_request ADD COLUMN IF NOT EXISTS withdrawal_channel varchar(32) DEFAULT 'wallet'",
+    "ALTER TABLE withdrawal_request ADD COLUMN IF NOT EXISTS withdrawal_account varchar(128) DEFAULT ''",
     "CREATE INDEX IF NOT EXISTS idx_withdrawal_user ON withdrawal_request (user_id)",
     "CREATE INDEX IF NOT EXISTS idx_withdrawal_status ON withdrawal_request (status)",
 ]

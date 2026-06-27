@@ -902,6 +902,71 @@ def numeric_cell(row, index=0):
         return Decimal("0")
 
 
+def request_arg_or_json(name):
+    if name in request.args:
+        return request.args.get(name)
+    return get_json_body().get(name)
+
+
+def select_node_identity_row(user_addr, node_mac):
+    current_cursor().execute(
+        """
+        select un.user_address,un.invite_code,un.parent_invite_code,
+        np.node_mac,np.disk_total,np.disk_used,np.online_duration,np.upload_bandwidth,np.update_time,
+        np.storage_path,np.storage_status,np.storage_error,
+        np.storage_total_gb,np.storage_used_gb,np.storage_free_gb
+        from user_node un
+        join node_power np on un.user_address=np.user_address
+        where un.user_address=%s and np.node_mac=%s
+        limit 1
+        """,
+        (user_addr, node_mac),
+    )
+    return current_cursor().fetchone()
+
+
+def format_node_identity_row(row):
+    update_time = row[8] if len(row) > 8 else None
+    disk_total = row[4] if len(row) > 4 and row[4] is not None else 0
+    disk_used = row[5] if len(row) > 5 and row[5] is not None else 0
+    online_min = row[6] if len(row) > 6 and row[6] is not None else 0
+    upload_bw = row[7] if len(row) > 7 and row[7] is not None else 0
+    is_online = node_is_online(update_time)
+    return {
+        "user_addr": row[0],
+        "node_address": row[0],
+        "invite_code": row[1] or "",
+        "parent_code": row[2] or "",
+        "node_mac": row[3] or "",
+        "disk_total": disk_total,
+        "disk_used": disk_used,
+        "online_min": online_min,
+        "upload_bw": upload_bw,
+        "update_time": str(update_time) if update_time else "",
+        "is_online": is_online,
+        "online_status": "在线" if is_online else "离线",
+        "storage_path": row[9] if len(row) > 9 and row[9] else "",
+        "storage_status": row[10] if len(row) > 10 and row[10] else "unknown",
+        "storage_error": row[11] if len(row) > 11 and row[11] else "",
+        "storage_total_gb": row[12] if len(row) > 12 and row[12] is not None else disk_total,
+        "storage_used_gb": row[13] if len(row) > 13 and row[13] is not None else disk_used,
+        "storage_free_gb": row[14] if len(row) > 14 and row[14] is not None else 0,
+    }
+
+
+def require_node_identity():
+    user_addr = str(request_arg_or_json("user_addr") or "").strip()
+    node_mac = str(request_arg_or_json("node_mac") or "").strip()
+    if not user_addr or not node_mac:
+        return None, (jsonify({"code":401,"msg":"缺少节点身份信息"}), 401)
+    row = select_node_identity_row(user_addr, node_mac)
+    if not row:
+        return None, (jsonify({"code":401,"msg":"节点身份校验失败"}), 401)
+    identity = format_node_identity_row(row)
+    g.current_node = identity
+    return identity, None
+
+
 def format_withdrawal_row(row):
     return {
         "id": row[0],
@@ -912,6 +977,9 @@ def format_withdrawal_row(row):
         "admin_note": row[5] or "",
         "created_at": str(row[6]) if len(row) > 6 and row[6] else "",
         "reviewed_at": str(row[7]) if len(row) > 7 and row[7] else "",
+        "node_address": row[8] if len(row) > 8 and row[8] else "",
+        "withdrawal_channel": row[9] if len(row) > 9 and row[9] else "wallet",
+        "withdrawal_account": row[10] if len(row) > 10 and row[10] else "",
     }
 
 
@@ -959,6 +1027,50 @@ def calculate_user_earnings(user_id, include_decimal=False):
     available_earnings = max(total_earnings - locked_withdrawals, Decimal("0"))
     summary = {
         "total_points": float(total_points),
+        "total_earnings": float(total_earnings),
+        "withdrawn_earnings": float(withdrawn_earnings),
+        "pending_withdrawals": float(pending_withdrawals),
+        "locked_withdrawals": float(locked_withdrawals),
+        "available_earnings": float(available_earnings),
+    }
+    if include_decimal:
+        summary["_available_earnings_decimal"] = available_earnings
+    return summary
+
+
+def calculate_node_earnings(node_address, include_decimal=False):
+    active_cursor = current_cursor()
+    active_cursor.execute(
+        """
+        select coalesce(sum(reward_amount),0)
+        from node_reward
+        where user_address=%s
+        """,
+        (node_address,),
+    )
+    total_earnings = numeric_cell(active_cursor.fetchone())
+    active_cursor.execute(
+        """
+        select coalesce(sum(amount),0)
+        from withdrawal_request
+        where node_address=%s and status='paid'
+        """,
+        (node_address,),
+    )
+    withdrawn_earnings = numeric_cell(active_cursor.fetchone())
+    active_cursor.execute(
+        """
+        select coalesce(sum(amount),0)
+        from withdrawal_request
+        where node_address=%s and status in ('pending','approved')
+        """,
+        (node_address,),
+    )
+    pending_withdrawals = numeric_cell(active_cursor.fetchone())
+    locked_withdrawals = withdrawn_earnings + pending_withdrawals
+    available_earnings = max(total_earnings - locked_withdrawals, Decimal("0"))
+    summary = {
+        "node_address": node_address,
         "total_earnings": float(total_earnings),
         "withdrawn_earnings": float(withdrawn_earnings),
         "pending_withdrawals": float(pending_withdrawals),
@@ -1367,6 +1479,92 @@ def reward_daily():
             "count":item[5],
         })
     return jsonify({"code":200,"data":data})
+
+
+@app.route("/api/node/me", methods=["GET"])
+def node_me():
+    identity, error_response = require_node_identity()
+    if error_response:
+        return error_response
+    return jsonify({"code":200,"data":identity})
+
+
+@app.route("/api/node/earnings", methods=["GET"])
+def node_earnings():
+    identity, error_response = require_node_identity()
+    if error_response:
+        return error_response
+    return jsonify({"code":200,"data":calculate_node_earnings(identity["user_addr"])})
+
+
+@app.route("/api/node/withdrawals", methods=["GET"])
+def node_withdrawal_list():
+    identity, error_response = require_node_identity()
+    if error_response:
+        return error_response
+    current_cursor().execute(
+        """
+        select id,user_id,wallet_address,amount,status,admin_note,created_at,reviewed_at,
+        node_address,withdrawal_channel,withdrawal_account
+        from withdrawal_request
+        where node_address=%s
+        order by created_at desc,id desc
+        """,
+        (identity["user_addr"],),
+    )
+    return jsonify({
+        "code":200,
+        "data":[format_withdrawal_row(row) for row in current_cursor().fetchall()],
+    })
+
+
+@app.route("/api/node/withdrawals", methods=["POST"])
+def node_withdrawal_create():
+    data = get_json_body()
+    identity, error_response = require_node_identity()
+    if error_response:
+        return error_response
+    amount, message = withdrawals.parse_withdrawal_amount(data.get("amount"))
+    if amount is None:
+        return jsonify({"code":400,"msg":message}), 400
+    wallet_address = str(data.get("wallet_address") or "").strip()[:128]
+    if not wallet_address:
+        return jsonify({"code":400,"msg":"缺少 wallet_address"}), 400
+    amount_for_db = withdrawals.format_withdrawal_amount(amount)
+
+    with DatabaseTransaction():
+        try:
+            summary = calculate_node_earnings(identity["user_addr"], include_decimal=True)
+            if amount > summary["_available_earnings_decimal"]:
+                rollback_database()
+                summary.pop("_available_earnings_decimal", None)
+                return jsonify({"code":400,"msg":"可提现余额不足","data":summary}), 400
+            current_cursor().execute(
+                """
+                insert into withdrawal_request(
+                    user_id,wallet_address,amount,status,node_address,withdrawal_channel,withdrawal_account
+                )
+                values(%s,%s,%s,%s,%s,%s,%s)
+                """,
+                (None,wallet_address,amount_for_db,"pending",identity["user_addr"],"wallet",wallet_address),
+            )
+            commit_database()
+        except Exception:
+            rollback_database()
+            return jsonify({"code":500,"msg":"提现申请创建失败"}), 500
+    return jsonify({
+        "code":200,
+        "msg":"提现申请已提交",
+        "data":{
+            "user_id":None,
+            "node_address":identity["user_addr"],
+            "wallet_address":wallet_address,
+            "withdrawal_channel":"wallet",
+            "withdrawal_account":wallet_address,
+            "amount":amount_for_db,
+            "status":"pending",
+        },
+    })
 
 
 @app.route("/api/leaderboard",methods=["GET"])
@@ -3235,7 +3433,8 @@ def user_withdrawal_list():
     user_id = g.current_user.get("user_id")
     current_cursor().execute(
         """
-        select id,user_id,wallet_address,amount,status,admin_note,created_at,reviewed_at
+        select id,user_id,wallet_address,amount,status,admin_note,created_at,reviewed_at,
+        node_address,withdrawal_channel,withdrawal_account
         from withdrawal_request
         where user_id=%s
         order by created_at desc,id desc
@@ -3274,10 +3473,12 @@ def user_withdrawal_create():
                 return jsonify({"code":400,"msg":"可提现余额不足","data":summary}), 400
             current_cursor().execute(
                 """
-                insert into withdrawal_request(user_id,wallet_address,amount,status)
-                values(%s,%s,%s,%s)
+                insert into withdrawal_request(
+                    user_id,wallet_address,amount,status,node_address,withdrawal_channel,withdrawal_account
+                )
+                values(%s,%s,%s,%s,%s,%s,%s)
                 """,
-                (user_id,wallet_address,amount_for_db,"pending"),
+                (user_id,wallet_address,amount_for_db,"pending","","wallet",wallet_address),
             )
             commit_database()
         except Exception:
@@ -3289,6 +3490,9 @@ def user_withdrawal_create():
         "data":{
             "user_id":user_id,
             "wallet_address":wallet_address,
+            "node_address":"",
+            "withdrawal_channel":"wallet",
+            "withdrawal_account":wallet_address,
             "amount":amount_for_db,
             "status":"pending",
         },
@@ -3299,7 +3503,8 @@ def user_withdrawal_create():
 def admin_withdrawal_list():
     current_cursor().execute(
         """
-        select id,user_id,wallet_address,amount,status,admin_note,created_at,reviewed_at
+        select id,user_id,wallet_address,amount,status,admin_note,created_at,reviewed_at,
+        node_address,withdrawal_channel,withdrawal_account
         from withdrawal_request
         order by created_at desc,id desc
         """

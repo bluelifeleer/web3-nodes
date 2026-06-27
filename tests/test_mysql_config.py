@@ -962,6 +962,22 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertIn("`download_count` int DEFAULT 0", sql)
         self.assertIn("`last_download_at` datetime DEFAULT NULL", sql)
 
+    def test_withdrawal_request_node_fields_exist_in_init_sql_and_migrations(self):
+        mysql_sql = Path("init_mysql.sql").read_text(encoding="utf-8")
+        postgres_sql = Path("init_postgresql.sql").read_text(encoding="utf-8")
+        mysql_server = load_server_main(DB_ENGINE="mysql")
+        postgres_server = load_server_main(DB_ENGINE="postgresql")
+        mysql_migrations = "\n".join(mysql_server.database_module.SCHEMA_MIGRATIONS)
+        postgres_migrations = "\n".join(postgres_server.database_module.POSTGRES_SCHEMA_MIGRATIONS)
+
+        self.assertIn("`user_id` int DEFAULT NULL", mysql_sql)
+        self.assertIn("user_id integer DEFAULT NULL", postgres_sql)
+        for column in ("node_address", "withdrawal_channel", "withdrawal_account"):
+            self.assertIn(column, mysql_sql)
+            self.assertIn(column, postgres_sql)
+            self.assertIn(column, mysql_migrations)
+            self.assertIn(column, postgres_migrations)
+
     def test_user_product_indexes_exist_in_postgresql_init_sql_and_migrations(self):
         sql = Path("init_postgresql.sql").read_text(encoding="utf-8")
         server_main = load_server_main(DB_ENGINE="postgresql")
@@ -2676,6 +2692,136 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertEqual(summary["pending_withdrawals"], 0.5)
         self.assertEqual(summary["locked_withdrawals"], 1.5)
         self.assertEqual(summary["available_earnings"], 1.0)
+
+    def test_format_withdrawal_row_supports_legacy_and_node_fields(self):
+        server_main = load_server_main()
+
+        legacy = server_main.format_withdrawal_row((
+            1,
+            7,
+            "0xwallet",
+            1.5,
+            "pending",
+            "",
+            server_main.datetime(2026, 6, 27, 12, 0, 0),
+            None,
+        ))
+        current = server_main.format_withdrawal_row((
+            2,
+            None,
+            "0xnode-wallet",
+            2.5,
+            "approved",
+            "ok",
+            server_main.datetime(2026, 6, 27, 12, 1, 0),
+            server_main.datetime(2026, 6, 27, 12, 2, 0),
+            "NODE_A",
+            "wallet",
+            "0xnode-wallet",
+        ))
+
+        self.assertEqual(legacy["node_address"], "")
+        self.assertEqual(legacy["withdrawal_channel"], "wallet")
+        self.assertEqual(legacy["withdrawal_account"], "")
+        self.assertEqual(current["node_address"], "NODE_A")
+        self.assertEqual(current["withdrawal_channel"], "wallet")
+        self.assertEqual(current["withdrawal_account"], "0xnode-wallet")
+
+    def test_node_identity_requires_registered_mac_pair(self):
+        server_main = load_server_main()
+
+        class FakeCursor:
+            def __init__(self):
+                self.last_sql = ""
+                self.executed = []
+
+            def execute(self, sql, params=None):
+                self.last_sql = sql
+                self.executed.append((sql, params))
+
+            def fetchone(self):
+                return None
+
+        server_main.cursor = FakeCursor()
+        server_main.init_db = lambda: True
+
+        response = server_main.app.test_client().get(
+            "/api/node/me?user_addr=NODE_A&node_mac=BAD"
+        )
+
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.get_json()["code"], 401)
+
+    def test_node_withdrawal_create_inserts_node_request(self):
+        server_main = load_server_main()
+
+        class FakeCursor:
+            def __init__(self):
+                self.executed = []
+                self.last_sql = ""
+
+            def execute(self, sql, params=None):
+                self.last_sql = sql
+                self.executed.append((sql, params))
+
+            def fetchone(self):
+                lowered = self.last_sql.lower()
+                if "from user_node" in lowered and "join node_power" in lowered:
+                    return (
+                        "NODE_A",
+                        "INVITE1",
+                        "",
+                        "MAC_A",
+                        128.0,
+                        42,
+                        8.5,
+                        server_main.datetime(2026, 6, 27, 12, 0, 0),
+                        "/data/node-a",
+                        "ready",
+                        "",
+                        256.0,
+                        128.0,
+                        128.0,
+                    )
+                if "from node_reward" in lowered:
+                    return (10,)
+                if "from withdrawal_request" in lowered:
+                    return (0,)
+                return None
+
+        fake_cursor = FakeCursor()
+        server_main.cursor = fake_cursor
+        server_main.db = types.SimpleNamespace(
+            commit=lambda: None,
+            rollback=lambda: None,
+            get_autocommit=lambda: True,
+            autocommit=lambda value: None,
+            begin=lambda: None,
+        )
+        server_main.init_db = lambda: True
+
+        response = server_main.app.test_client().post(
+            "/api/node/withdrawals",
+            json={
+                "user_addr": "NODE_A",
+                "node_mac": "MAC_A",
+                "wallet_address": "0xnode-wallet",
+                "amount": "2.500000",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        insert_queries = [
+            params
+            for sql, params in fake_cursor.executed
+            if sql.strip().lower().startswith("insert into withdrawal_request")
+        ]
+        self.assertTrue(insert_queries)
+        self.assertIn(insert_queries[-1][0], (None, 0))
+        self.assertEqual(
+            insert_queries[-1][1:],
+            ("0xnode-wallet", "2.500000", "pending", "NODE_A", "wallet", "0xnode-wallet"),
+        )
 
     def test_admin_withdrawals_requires_admin_token(self):
         server_main = load_server_main(ADMIN_API_TOKEN="secret-token")
