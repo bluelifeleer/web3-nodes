@@ -1485,6 +1485,9 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertIn("提现申请", server_main.ADMIN_HTML)
         self.assertIn("getAdminWithdrawals", server_main.ADMIN_HTML)
         self.assertIn("reviewWithdrawal", server_main.ADMIN_HTML)
+        self.assertIn("escHtml(item.storage_status", server_main.ADMIN_HTML)
+        self.assertIn("withdrawalNoteDrafts", server_main.ADMIN_HTML)
+        self.assertIn("document.activeElement", server_main.ADMIN_HTML)
 
     def test_auto_settle_reward_uses_daily_snapshot_key(self):
         server_main = load_server_main()

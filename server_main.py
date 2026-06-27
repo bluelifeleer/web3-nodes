@@ -1774,6 +1774,7 @@ ADMIN_HTML = '''
 const AMAP_WEB_KEY = "{{ amap_web_key }}";
 const ADMIN_REFRESH_INTERVAL_MS = 10000;
 let adminRefreshTimer = null;
+const withdrawalNoteDrafts = {};
 
 function getAdminToken(){
     return localStorage.getItem("admin_token") || "";
@@ -1841,6 +1842,8 @@ function getNodes(){
     .then(data=>{
         let html = "";
         data.data.forEach(item=>{
+            const storageStatus = escHtml(item.storage_status || "unknown");
+            const storageError = escHtml(item.storage_error || "");
             html += `<tr>
                 <td>${item.user_addr}</td>
                 <td>${item.invite_code}</td>
@@ -1849,7 +1852,7 @@ function getNodes(){
                 <td>${item.storage_total_gb || 0}</td>
                 <td>${item.storage_used_gb || item.disk_used || 0}</td>
                 <td>${item.storage_free_gb || 0}</td>
-                <td>${item.storage_status || "unknown"} ${item.storage_error ? "｜" + item.storage_error : ""}</td>
+                <td>${storageStatus} ${storageError ? "｜" + storageError : ""}</td>
                 <td>${item.online_min}</td>
                 <td>${item.upload_bw}</td>
                 <td>${item.online_status}</td>
@@ -1938,6 +1941,11 @@ function getInviteTree(){
 }
 
 function getAdminWithdrawals(){
+    const active = document.activeElement;
+    if(active && active.dataset && active.dataset.withdrawalNote === "1"){
+        withdrawalNoteDrafts[active.dataset.withdrawalId] = active.value;
+        return;
+    }
     adminFetch("/api/admin/withdrawals")
     .then(res=>res.json())
     .then(data=>{
@@ -1947,13 +1955,17 @@ function getAdminWithdrawals(){
             const wallet = escHtml(item.wallet_address || "");
             const amount = escHtml(item.amount || 0);
             const status = escHtml(item.status || "");
-            const note = escHtml(item.admin_note || "");
+            const noteId = String(item.id);
+            const rawNote = Object.prototype.hasOwnProperty.call(withdrawalNoteDrafts, noteId)
+                ? withdrawalNoteDrafts[noteId]
+                : (item.admin_note || "");
+            const note = escHtml(rawNote);
             const actions = item.status === "pending"
                 ? `<button onclick="reviewWithdrawal(${item.id},'approved')">通过</button><button onclick="reviewWithdrawal(${item.id},'rejected')">驳回</button>`
                 : item.status === "approved"
                     ? `<button onclick="reviewWithdrawal(${item.id},'paid')">标记已提现</button><button onclick="reviewWithdrawal(${item.id},'rejected')">驳回</button>`
                     : "已完成";
-            html += `<tr><td>${item.id}</td><td>${owner}</td><td>${wallet}</td><td>${amount}</td><td>${status}</td><td><input id="withdrawalNote-${item.id}" value="${note}" placeholder="审核备注" style="width:120px"></td><td>${actions}</td></tr>`;
+            html += `<tr><td>${item.id}</td><td>${owner}</td><td>${wallet}</td><td>${amount}</td><td>${status}</td><td><input id="withdrawalNote-${item.id}" data-withdrawal-note="1" data-withdrawal-id="${item.id}" value="${note}" placeholder="审核备注" style="width:120px" oninput="withdrawalNoteDrafts['${item.id}']=this.value"></td><td>${actions}</td></tr>`;
         });
         document.getElementById("withdrawalTable").innerHTML = html || '<tr><td colspan="7">暂无提现申请</td></tr>';
     });
@@ -1962,11 +1974,13 @@ function getAdminWithdrawals(){
 function reviewWithdrawal(id,status){
     const noteInput = document.getElementById(`withdrawalNote-${id}`);
     const admin_note = noteInput ? noteInput.value : "";
+    withdrawalNoteDrafts[String(id)] = admin_note;
     adminFetch(`/api/admin/withdrawals/${id}/review`, {
         method:"POST",
         headers:{"Content-Type":"application/json"},
         body:JSON.stringify({status,admin_note})
     }).then(res=>res.json()).then(data=>{
+        delete withdrawalNoteDrafts[String(id)];
         alert(data.msg || "操作完成");
         getAdminWithdrawals();
     });
