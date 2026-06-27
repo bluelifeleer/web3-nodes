@@ -1640,6 +1640,51 @@ class MysqlConfigTest(unittest.TestCase):
             else:
                 sys.modules["webview"] = old_webview
 
+    def test_client_console_html_contains_node_operations(self):
+        old_requests = sys.modules.get("requests")
+        old_webview = sys.modules.get("webview")
+        try:
+            sys.modules["requests"] = types.SimpleNamespace(post=lambda *args, **kwargs: None, get=lambda *args, **kwargs: None)
+            sys.modules["webview"] = None
+            sys.modules.pop("client", None)
+            client_module = importlib.import_module("client")
+            html = client_module.CLIENT_MANAGE_HTML
+            for marker in ("节点控制台", "总容量", "提交提现", "添加目录", "停止节点", "重启节点"):
+                self.assertIn(marker, html)
+        finally:
+            sys.modules.pop("client", None)
+            if old_requests is None:
+                sys.modules.pop("requests", None)
+            else:
+                sys.modules["requests"] = old_requests
+            if old_webview is None:
+                sys.modules.pop("webview", None)
+            else:
+                sys.modules["webview"] = old_webview
+
+    def test_client_console_status_payload_includes_capacity(self):
+        old_requests = sys.modules.get("requests")
+        old_webview = sys.modules.get("webview")
+        try:
+            sys.modules["requests"] = types.SimpleNamespace(post=lambda *args, **kwargs: None, get=lambda *args, **kwargs: None)
+            sys.modules["webview"] = None
+            sys.modules.pop("client", None)
+            client_module = importlib.import_module("client")
+            state = client_module.create_client_state("http://server", "NODE_A", "MAC_A", "D:/node", 8787)
+            state["storage"] = {"storage_status":"ok","storage_total_gb":100,"storage_used_gb":20,"storage_free_gb":80}
+            payload = client_module.client_status_payload(state)
+            self.assertEqual(payload["storage"]["storage_free_gb"], 80)
+        finally:
+            sys.modules.pop("client", None)
+            if old_requests is None:
+                sys.modules.pop("requests", None)
+            else:
+                sys.modules["requests"] = old_requests
+            if old_webview is None:
+                sys.modules.pop("webview", None)
+            else:
+                sys.modules["webview"] = old_webview
+
     def test_client_storage_probe_reports_unavailable_directory(self):
         old_requests = sys.modules.get("requests")
         old_webview = sys.modules.get("webview")

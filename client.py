@@ -8,9 +8,11 @@ import requests
 import sys
 import shutil
 import tempfile
+import threading
 from pathlib import Path
 import os
 import json
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 try:
     import webview
 except Exception:
@@ -24,6 +26,31 @@ HEARTBEAT_INTERVAL = 60
 RECONNECT_INTERVAL = 10
 NODE_STORAGE_DIR = ""
 MANAGE_PORT = 8787
+
+CLIENT_MANAGE_HTML = """
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8"><title>节点控制台</title></head>
+<body>
+  <main>
+    <h1>节点控制台</h1>
+    <section id="overview">运行状态 / 服务连接 / 最后心跳</section>
+    <section id="capacity">总容量 / 已使用 / 未使用 / 目录状态</section>
+    <section id="storage">添加目录 / 重新检测</section>
+    <section id="earnings">收益 / 提交提现 / 提现记录</section>
+    <section id="controls">停止节点 / 重启节点</section>
+  </main>
+  <script>
+    const api = (path, options) => fetch(path, options).then(res => res.json());
+    async function refreshAll(){
+      await Promise.all([api("/api/status"), api("/api/earnings"), api("/api/withdrawals")]);
+    }
+    async function stopNode(){ if(confirm("确认停止节点？")) await api("/api/control/stop", {method:"POST"}); }
+    async function restartNode(){ if(confirm("确认重启节点？")) await api("/api/control/restart", {method:"POST"}); }
+  </script>
+</body>
+</html>
+"""
 
 
 def safe_print(message):
@@ -159,6 +186,105 @@ def inspect_storage_dir(storage_dir):
             "storage_free_gb": 0,
         }
 
+
+def create_client_state(server_url, user_addr, node_mac, storage_dir, manage_port):
+    return {
+        "server_url": server_url,
+        "user_addr": user_addr,
+        "node_mac": node_mac,
+        "storage_dir": storage_dir,
+        "manage_port": manage_port,
+        "running": True,
+        "last_heartbeat": "",
+        "last_error": "",
+        "storage": inspect_storage_dir(storage_dir),
+    }
+
+
+def client_status_payload(state):
+    return {
+        "server_url": state["server_url"],
+        "user_addr": state["user_addr"],
+        "node_mac": state["node_mac"],
+        "running": state["running"],
+        "last_heartbeat": state["last_heartbeat"],
+        "last_error": state["last_error"],
+        "storage": state["storage"],
+    }
+
+
+def make_manage_handler(state):
+    class ManageHandler(BaseHTTPRequestHandler):
+        def log_message(self, format, *args):
+            return
+
+        def _read_json(self):
+            length = int(self.headers.get("Content-Length", "0") or 0)
+            if length <= 0:
+                return {}
+            try:
+                body = self.rfile.read(length).decode("utf-8")
+                data = json.loads(body)
+                return data if isinstance(data, dict) else {}
+            except Exception:
+                return {}
+
+        def _send_json(self, payload, status=200):
+            body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def _send_html(self, html):
+            body = html.encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self):
+            if self.path == "/":
+                self._send_html(CLIENT_MANAGE_HTML)
+            elif self.path == "/api/status":
+                self._send_json({"ok": True, "data": client_status_payload(state)})
+            elif self.path == "/api/earnings":
+                self._send_json({"ok": True, "data": [], "message": "收益接口将在后续任务完成"})
+            elif self.path == "/api/withdrawals":
+                self._send_json({"ok": True, "data": [], "message": "提现接口将在后续任务完成"})
+            else:
+                self._send_json({"ok": False, "error": "not found"}, status=404)
+
+        def do_POST(self):
+            if self.path == "/api/storage":
+                data = self._read_json()
+                storage_dir = str(data.get("storage_dir") or data.get("path") or "").strip()
+                if storage_dir:
+                    state["storage_dir"] = storage_dir
+                state["storage"] = inspect_storage_dir(state["storage_dir"])
+                self._send_json({"ok": True, "data": client_status_payload(state)})
+            elif self.path == "/api/refresh":
+                state["storage"] = inspect_storage_dir(state["storage_dir"])
+                self._send_json({"ok": True, "data": client_status_payload(state)})
+            elif self.path == "/api/control/stop":
+                self._send_json({"ok": True, "message": "停止节点将在后续任务完成"})
+            elif self.path == "/api/control/restart":
+                self._send_json({"ok": True, "message": "重启节点将在后续任务完成"})
+            elif self.path == "/api/withdrawals":
+                self._send_json({"ok": True, "message": "提交提现将在后续任务完成"})
+            else:
+                self._send_json({"ok": False, "error": "not found"}, status=404)
+
+    return ManageHandler
+
+
+def start_manage_server(state):
+    server = ThreadingHTTPServer(("127.0.0.1", int(state["manage_port"])), make_manage_handler(state))
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server
+
 # 生成唯一设备指纹（防多开、防作弊）
 def get_device_mac():
     return str(uuid.getnode())
@@ -231,45 +357,64 @@ def client_run():
     device_mac = get_device_mac()
     # 根据设备MAC生成唯一用户标识
     user_addr = "NODE_" + hashlib.md5(device_mac.encode()).hexdigest()[:12]
+    state = create_client_state(SERVER_URL, user_addr, device_mac, NODE_STORAGE_DIR, MANAGE_PORT)
+    manage_server = None
+    try:
+        manage_server = start_manage_server(state)
+        safe_print(f"🌐 节点管理页：http://127.0.0.1:{MANAGE_PORT}")
+    except Exception as exc:
+        state["last_error"] = f"管理页启动失败：{exc}"
+        safe_print(f"❌ 管理页启动失败：{exc}")
 
-    # 1. 首次注册绑定上级
-    wait_for_registration(
-        SERVER_URL,
-        user_addr,
-        device_mac,
-        PARENT_INVITE,
-        reconnect_interval=reconnect_interval,
-    )
+    try:
+        # 1. 首次注册绑定上级
+        wait_for_registration(
+            SERVER_URL,
+            user_addr,
+            device_mac,
+            PARENT_INVITE,
+            reconnect_interval=reconnect_interval,
+        )
 
-    # 2. 循环心跳上报（60秒一次）
-    safe_print("🔄 节点持续运行中，实时上报存储数据...")
-    while True:
-        storage_info = inspect_storage_dir(NODE_STORAGE_DIR)
-        upload_bw = round(random.uniform(0.2,3.0),2)
-        try:
-            payload = {
-                "user_addr":user_addr,
-                "node_mac":device_mac,
-                "disk_used":storage_info["storage_used_gb"],
-                "upload_bw":upload_bw,
-                **storage_info,
-            }
-            requests.post(f"{SERVER_URL}/heartbeat",json=payload,timeout=10)
-            safe_print(f"✅ 心跳上报成功｜当前存储：{storage_info['storage_used_gb']}G｜上行带宽：{upload_bw}MB/s")
-        except:
-            safe_print("❌ 心跳上报失败，等待重连...")
+        # 2. 循环心跳上报（60秒一次）
+        safe_print("🔄 节点持续运行中，实时上报存储数据...")
+        while True:
+            storage_info = inspect_storage_dir(NODE_STORAGE_DIR)
+            state["storage"] = storage_info
+            upload_bw = round(random.uniform(0.2,3.0),2)
+            try:
+                payload = {
+                    "user_addr":user_addr,
+                    "node_mac":device_mac,
+                    "disk_used":storage_info["storage_used_gb"],
+                    "upload_bw":upload_bw,
+                    **storage_info,
+                }
+                requests.post(f"{SERVER_URL}/heartbeat",json=payload,timeout=10)
+                state["running"] = True
+                state["last_heartbeat"] = time.strftime("%Y-%m-%d %H:%M:%S")
+                state["last_error"] = ""
+                safe_print(f"✅ 心跳上报成功｜当前存储：{storage_info['storage_used_gb']}G｜上行带宽：{upload_bw}MB/s")
+            except Exception as exc:
+                state["running"] = False
+                state["last_error"] = str(exc)
+                safe_print("❌ 心跳上报失败，等待重连...")
 
-        # 在 while True 心跳循环内添加：
-        # 自动上报地理位置
-        try:
-            requests.post(f"{SERVER_URL}/api/report_location",json={
-                "user_addr":user_addr,
-                "node_mac":device_mac
-            },timeout=5)
-        except:
-            pass
-        
-        time.sleep(HEARTBEAT_INTERVAL)
+            # 在 while True 心跳循环内添加：
+            # 自动上报地理位置
+            try:
+                requests.post(f"{SERVER_URL}/api/report_location",json={
+                    "user_addr":user_addr,
+                    "node_mac":device_mac
+                },timeout=5)
+            except:
+                pass
+
+            time.sleep(HEARTBEAT_INTERVAL)
+    finally:
+        if manage_server is not None:
+            manage_server.shutdown()
+            manage_server.server_close()
 
 
 def open_map_window():
