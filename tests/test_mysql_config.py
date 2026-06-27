@@ -1354,6 +1354,7 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertEqual(record["owner_user_id"], 7)
         self.assertEqual(record["download_count"], 4)
         self.assertEqual(record["file_name"], "demo.txt")
+        self.assertEqual(record["download_url"], "")
 
     def test_user_files_requires_user_token(self):
         server_main = load_server_main(SESSION_SECRET="session-secret")
@@ -1385,7 +1386,9 @@ class MysqlConfigTest(unittest.TestCase):
                     return (7, "alice", "hash", "0xabc", "active")
                 if "from point_ledger" in lowered:
                     return (250,)
-                if "from withdrawal_request" in lowered:
+                if "status='paid'" in lowered:
+                    return (0,)
+                if "status in ('pending','approved')" in lowered:
                     return (1,)
                 return None
 
@@ -1494,6 +1497,35 @@ class MysqlConfigTest(unittest.TestCase):
             sql.strip().lower().startswith("insert into withdrawal_request")
             for sql, _ in fake_cursor.executed
         ))
+
+    def test_calculate_user_earnings_reports_withdrawn_and_pending_breakdown(self):
+        server_main = load_server_main()
+
+        class FakeCursor:
+            def __init__(self):
+                self.last_sql = ""
+
+            def execute(self, sql, params=None):
+                self.last_sql = sql.lower()
+
+            def fetchone(self):
+                if "from point_ledger" in self.last_sql:
+                    return (250,)
+                if "status='paid'" in self.last_sql:
+                    return (1,)
+                if "status in ('pending','approved')" in self.last_sql:
+                    return (0.5,)
+                return (0,)
+
+        server_main.cursor = FakeCursor()
+
+        summary = server_main.calculate_user_earnings(7)
+
+        self.assertEqual(summary["total_earnings"], 2.5)
+        self.assertEqual(summary["withdrawn_earnings"], 1.0)
+        self.assertEqual(summary["pending_withdrawals"], 0.5)
+        self.assertEqual(summary["locked_withdrawals"], 1.5)
+        self.assertEqual(summary["available_earnings"], 1.0)
 
     def test_admin_withdrawals_requires_admin_token(self):
         server_main = load_server_main(ADMIN_API_TOKEN="secret-token")
@@ -2042,6 +2074,7 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         data = response.get_json()["data"]
         self.assertEqual(data["file_hash"], file_hash)
+        self.assertTrue(data["share_url"].startswith("/s/"))
         self.assertTrue(data["extract_code_required"])
         self.assertNotIn("extract_code_hash", data)
         insert_params = [
@@ -2798,6 +2831,39 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data, b"plain-data")
         self.assertIn("attachment", response.headers["Content-Disposition"])
+
+    def test_user_owned_public_file_download_requires_share_route(self):
+        server_main = load_server_main()
+
+        class FakeCursor:
+            def execute(self, *args, **kwargs):
+                return None
+
+            def fetchone(self):
+                return (
+                    1,
+                    "demo.txt",
+                    "hash1",
+                    "cid1",
+                    1,
+                    1,
+                    "NODE_A",
+                    "[]",
+                    server_main.datetime.now(),
+                    "public",
+                    "",
+                    None,
+                    7,
+                )
+
+        server_main.cursor = FakeCursor()
+        server_main.init_db = lambda: True
+        server_main.get_ipfs_client = lambda: self.fail("raw user file download should not read IPFS")
+
+        response = server_main.app.test_client().get("/api/file_download/hash1")
+
+        self.assertEqual(response.status_code, 403)
+        self.assertIn("分享链接", response.get_json()["msg"])
 
 
 if __name__ == "__main__":

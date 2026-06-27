@@ -591,6 +591,7 @@ def format_file_record(item):
         "visibility": visibility,
         "access_token": access_token,
         "deleted_at": str(item[11]) if len(item) > 11 and item[11] else "",
+        "owner_user_id": item[12] if len(item) > 12 else None,
         "download_url": f"/api/file_download/{file_hash}{token_query}",
     }
 
@@ -763,15 +764,27 @@ def calculate_user_earnings(user_id, include_decimal=False):
         """
         select coalesce(sum(amount),0)
         from withdrawal_request
-        where user_id=%s and status in ('pending','approved','paid')
+        where user_id=%s and status='paid'
         """,
         (user_id,),
     )
-    locked_withdrawals = numeric_cell(active_cursor.fetchone())
+    withdrawn_earnings = numeric_cell(active_cursor.fetchone())
+    active_cursor.execute(
+        """
+        select coalesce(sum(amount),0)
+        from withdrawal_request
+        where user_id=%s and status in ('pending','approved')
+        """,
+        (user_id,),
+    )
+    pending_withdrawals = numeric_cell(active_cursor.fetchone())
+    locked_withdrawals = withdrawn_earnings + pending_withdrawals
     available_earnings = max(total_earnings - locked_withdrawals, Decimal("0"))
     summary = {
         "total_points": float(total_points),
         "total_earnings": float(total_earnings),
+        "withdrawn_earnings": float(withdrawn_earnings),
+        "pending_withdrawals": float(pending_withdrawals),
         "locked_withdrawals": float(locked_withdrawals),
         "available_earnings": float(available_earnings),
     }
@@ -894,6 +907,8 @@ def filter_file_records(rows, keyword="", page=1, page_size=20):
 
 
 def file_access_allowed(record, supplied_token):
+    if record.get("owner_user_id") is not None:
+        return False
     if normalize_visibility(record.get("visibility")) == "public":
         return True
     return bool(record.get("access_token")) and secrets.compare_digest(
@@ -1768,7 +1783,7 @@ USER_UPLOAD_HTML = '''
                 return;
             }
             fileHashInput.value = data.file_hash || "";
-            resultBox.textContent = `上传完成\\nfile_hash: ${data.file_hash || ""}\\ndownload_url: ${data.download_url || ""}\\n可继续生成 /s/<share_code> 分享链接。`;
+            resultBox.textContent = `上传完成\\nfile_hash: ${data.file_hash || ""}\\n请继续生成 /s/<share_code> 分享链接后下载。`;
         }catch(error){
             resultBox.textContent = `上传失败\\n${error.message}`;
         }
@@ -2075,7 +2090,7 @@ USER_DASHBOARD_HTML = '''
                 {label:"哈希", key:"file_hash"},
                 {label:"大小(MB)", key:"size"},
                 {label:"权限", key:"visibility"},
-                {label:"下载", render:(row) => row.download_url || ""}
+                {label:"下载", render:(row) => row.download_url || "请创建分享"}
             ], files.data || []);
             renderTable("sharesBox", [
                 {label:"分享码", key:"share_code"},
@@ -2776,7 +2791,8 @@ def user_file_upload():
             "access_token":access_token,
             "owner_user_id":owner_user_id,
             "owner_wallet_address":owner_wallet_address,
-            "download_url":f"/api/file_download/{real_file_hash}" + (f"?token={access_token}" if access_token else "")
+            "download_url":"",
+            "share_required":True
         }
     })
 
@@ -2884,7 +2900,7 @@ def user_file_share_create(file_hash):
             "max_downloads":max_downloads,
             "download_count":0,
             "status":status,
-            "share_url":f"/api/share/{urllib.parse.quote(share_code)}",
+            "share_url":f"/s/{urllib.parse.quote(share_code)}",
         },
     })
 
@@ -3112,7 +3128,7 @@ def ipfs_status():
 @app.route("/api/file_download/<file_hash>",methods=["GET"])
 def file_download(file_hash):
     current_cursor().execute("""
-    select id,file_name,file_hash,ipfs_cid,file_size,shard_count,upload_user,stored_nodes,create_time,visibility,access_token,deleted_at
+    select id,file_name,file_hash,ipfs_cid,file_size,shard_count,upload_user,stored_nodes,create_time,visibility,access_token,deleted_at,owner_user_id
     from file_chain_record where file_hash=%s and deleted_at is null
     """,(file_hash,))
     row = current_cursor().fetchone()
@@ -3120,6 +3136,8 @@ def file_download(file_hash):
         return jsonify({"code":404,"msg":"文件不存在"}), 404
     record = format_file_record(row)
     if not file_access_allowed(record, request.args.get("token", "")):
+        if record.get("owner_user_id") is not None:
+            return jsonify({"code":403,"msg":"用户文件请通过分享链接下载"}), 403
         return jsonify({"code":403,"msg":"文件访问令牌无效"}), 403
     client = get_ipfs_client()
     try:

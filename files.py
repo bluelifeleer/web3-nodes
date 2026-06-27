@@ -1,5 +1,4 @@
 import json
-import urllib.parse
 
 
 USER_FILE_SELECT_PROJECTION = (
@@ -25,7 +24,6 @@ def format_user_file_record(row):
     visibility = normalize_visibility(row[9] if len(row) > 9 else "public")
     access_token = row[10] if len(row) > 10 and row[10] else ""
     file_hash = row[2]
-    token_query = f"?token={urllib.parse.quote(access_token)}" if access_token else ""
     return {
         "id": row[0],
         "file_name": row[1],
@@ -44,5 +42,5 @@ def format_user_file_record(row):
         "owner_wallet_address": row[13] if len(row) > 13 and row[13] else "",
         "download_count": row[14] if len(row) > 14 and row[14] is not None else 0,
         "last_download_at": str(row[15]) if len(row) > 15 and row[15] else "",
-        "download_url": f"/api/file_download/{file_hash}{token_query}",
+        "download_url": "",
     }
