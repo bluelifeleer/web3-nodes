@@ -1,4 +1,5 @@
 import importlib
+import http.client
 import io
 import json
 import os
@@ -1796,8 +1797,9 @@ class MysqlConfigTest(unittest.TestCase):
                 with urllib.request.urlopen(f"{base_url}/", timeout=5) as response:
                     html = response.read().decode("utf-8")
                 self.assertIn("节点控制台", html)
+                self.assertIn(state["csrf_token"], html)
 
-                with urllib.request.urlopen(f"{base_url}/api/status", timeout=5) as response:
+                with urllib.request.urlopen(f"{base_url}/api/status?x=1", timeout=5) as response:
                     status_payload = json.loads(response.read().decode("utf-8"))
                 self.assertEqual(status_payload["data"]["storage"]["storage_total_gb"], 100)
                 self.assertEqual(status_payload["data"]["storage"]["storage_free_gb"], 80)
@@ -1805,7 +1807,7 @@ class MysqlConfigTest(unittest.TestCase):
                 storage_request = urllib.request.Request(
                     f"{base_url}/api/storage",
                     data=json.dumps({"storage_dir": "D:/new"}).encode("utf-8"),
-                    headers={"Content-Type": "application/json"},
+                    headers={"Content-Type": "application/json", "X-CSRF-Token": state["csrf_token"]},
                     method="POST",
                 )
                 with urllib.request.urlopen(storage_request, timeout=5) as response:
@@ -1817,7 +1819,7 @@ class MysqlConfigTest(unittest.TestCase):
                 refresh_request = urllib.request.Request(
                     f"{base_url}/api/refresh",
                     data=b"{}",
-                    headers={"Content-Type": "application/json"},
+                    headers={"Content-Type": "application/json", "X-CSRF-Token": state["csrf_token"]},
                     method="POST",
                 )
                 with urllib.request.urlopen(refresh_request, timeout=5) as response:
@@ -1872,7 +1874,7 @@ class MysqlConfigTest(unittest.TestCase):
                 request = urllib.request.Request(
                     f"http://127.0.0.1:{server.server_port}/api/storage",
                     data=json.dumps({"storage_dir": "D:/console"}).encode("utf-8"),
-                    headers={"Content-Type": "application/json"},
+                    headers={"Content-Type": "application/json", "X-CSRF-Token": state["csrf_token"]},
                     method="POST",
                 )
                 with urllib.request.urlopen(request, timeout=5) as response:
@@ -1969,6 +1971,148 @@ class MysqlConfigTest(unittest.TestCase):
             self.assertTrue(fake_server.close_called)
         finally:
             sys.argv = old_argv
+            sys.modules.pop("client", None)
+            if old_requests is None:
+                sys.modules.pop("requests", None)
+            else:
+                sys.modules["requests"] = old_requests
+            if old_webview is None:
+                sys.modules.pop("webview", None)
+            else:
+                sys.modules["webview"] = old_webview
+
+    def test_client_storage_route_rejects_missing_token_and_preserves_state(self):
+        old_requests = sys.modules.get("requests")
+        old_webview = sys.modules.get("webview")
+        try:
+            sys.modules["requests"] = types.SimpleNamespace(post=lambda *args, **kwargs: None, get=lambda *args, **kwargs: None)
+            sys.modules["webview"] = None
+            sys.modules.pop("client", None)
+            client_module = importlib.import_module("client")
+            client_module.inspect_storage_dir = lambda storage_dir: {
+                "storage_path": storage_dir,
+                "storage_status": "ok",
+                "storage_total_gb": 100,
+                "storage_used_gb": 20,
+                "storage_free_gb": 80,
+            }
+            state = client_module.create_client_state("http://server", "NODE_A", "MAC_A", "D:/old", 8787)
+            server = client_module.ThreadingHTTPServer(
+                ("127.0.0.1", 0),
+                client_module.make_manage_handler(state),
+            )
+            thread = client_module.threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=5)
+                connection.request(
+                    "POST",
+                    "/api/storage",
+                    body=json.dumps({"storage_dir": "D:/new"}).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                )
+                response = connection.getresponse()
+                body = json.loads(response.read().decode("utf-8"))
+                connection.close()
+
+                self.assertEqual(response.status, 403)
+                self.assertFalse(body["ok"])
+                self.assertEqual(state["storage_dir"], "D:/old")
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+        finally:
+            sys.modules.pop("client", None)
+            if old_requests is None:
+                sys.modules.pop("requests", None)
+            else:
+                sys.modules["requests"] = old_requests
+            if old_webview is None:
+                sys.modules.pop("webview", None)
+            else:
+                sys.modules["webview"] = old_webview
+
+    def test_client_storage_route_rejects_non_json_posts(self):
+        old_requests = sys.modules.get("requests")
+        old_webview = sys.modules.get("webview")
+        try:
+            sys.modules["requests"] = types.SimpleNamespace(post=lambda *args, **kwargs: None, get=lambda *args, **kwargs: None)
+            sys.modules["webview"] = None
+            sys.modules.pop("client", None)
+            client_module = importlib.import_module("client")
+            state = client_module.create_client_state("http://server", "NODE_A", "MAC_A", "D:/old", 8787)
+            server = client_module.ThreadingHTTPServer(
+                ("127.0.0.1", 0),
+                client_module.make_manage_handler(state),
+            )
+            thread = client_module.threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=5)
+                connection.request(
+                    "POST",
+                    "/api/storage",
+                    body=b"storage_dir=D:/new",
+                    headers={"Content-Type": "text/plain", "X-CSRF-Token": state["csrf_token"]},
+                )
+                response = connection.getresponse()
+                body = json.loads(response.read().decode("utf-8"))
+                connection.close()
+
+                self.assertEqual(response.status, 400)
+                self.assertFalse(body["ok"])
+                self.assertEqual(state["storage_dir"], "D:/old")
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+        finally:
+            sys.modules.pop("client", None)
+            if old_requests is None:
+                sys.modules.pop("requests", None)
+            else:
+                sys.modules["requests"] = old_requests
+            if old_webview is None:
+                sys.modules.pop("webview", None)
+            else:
+                sys.modules["webview"] = old_webview
+
+    def test_client_storage_route_rejects_invalid_content_length_cleanly(self):
+        old_requests = sys.modules.get("requests")
+        old_webview = sys.modules.get("webview")
+        try:
+            sys.modules["requests"] = types.SimpleNamespace(post=lambda *args, **kwargs: None, get=lambda *args, **kwargs: None)
+            sys.modules["webview"] = None
+            sys.modules.pop("client", None)
+            client_module = importlib.import_module("client")
+            state = client_module.create_client_state("http://server", "NODE_A", "MAC_A", "D:/old", 8787)
+            server = client_module.ThreadingHTTPServer(
+                ("127.0.0.1", 0),
+                client_module.make_manage_handler(state),
+            )
+            thread = client_module.threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=5)
+            try:
+                connection.putrequest("POST", "/api/storage")
+                connection.putheader("Content-Type", "application/json")
+                connection.putheader("X-CSRF-Token", state["csrf_token"])
+                connection.putheader("Content-Length", "not-a-number")
+                connection.endheaders()
+
+                response = connection.getresponse()
+                body = json.loads(response.read().decode("utf-8"))
+
+                self.assertEqual(response.status, 400)
+                self.assertFalse(body["ok"])
+                self.assertEqual(state["storage_dir"], "D:/old")
+            finally:
+                connection.close()
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+        finally:
             sys.modules.pop("client", None)
             if old_requests is None:
                 sys.modules.pop("requests", None)

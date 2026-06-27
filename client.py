@@ -9,10 +9,12 @@ import sys
 import shutil
 import tempfile
 import threading
+import secrets
 from pathlib import Path
 import os
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import urlparse
 try:
     import webview
 except Exception:
@@ -41,7 +43,15 @@ CLIENT_MANAGE_HTML = """
     <section id="controls">停止节点 / 重启节点</section>
   </main>
   <script>
-    const api = (path, options) => fetch(path, options).then(res => res.json());
+    const CSRF_TOKEN = "__CSRF_TOKEN__";
+    const api = (path, options = {}) => {
+      const opts = {...options};
+      if (opts.method && opts.method.toUpperCase() !== "GET") {
+        opts.headers = {...(opts.headers || {}), "Content-Type": "application/json", "X-CSRF-Token": CSRF_TOKEN};
+        if (!opts.body) opts.body = "{}";
+      }
+      return fetch(path, opts).then(res => res.json());
+    };
     async function refreshAll(){
       await Promise.all([api("/api/status"), api("/api/earnings"), api("/api/withdrawals")]);
     }
@@ -194,6 +204,7 @@ def create_client_state(server_url, user_addr, node_mac, storage_dir, manage_por
         "node_mac": node_mac,
         "storage_dir": storage_dir,
         "manage_port": manage_port,
+        "csrf_token": secrets.token_urlsafe(24),
         "running": True,
         "last_heartbeat": "",
         "last_error": "",
@@ -254,16 +265,44 @@ def make_manage_handler(state):
         def log_message(self, format, *args):
             return
 
+        def _route_path(self):
+            return urlparse(self.path).path
+
         def _read_json(self):
-            length = int(self.headers.get("Content-Length", "0") or 0)
+            try:
+                length = int(self.headers.get("Content-Length", "0") or 0)
+            except ValueError:
+                self._send_json({"ok": False, "error": "invalid content length"}, status=400)
+                return None
+            if length < 0:
+                self._send_json({"ok": False, "error": "invalid content length"}, status=400)
+                return None
             if length <= 0:
                 return {}
             try:
                 body = self.rfile.read(length).decode("utf-8")
                 data = json.loads(body)
-                return data if isinstance(data, dict) else {}
+                if not isinstance(data, dict):
+                    self._send_json({"ok": False, "error": "json body must be an object"}, status=400)
+                    return None
+                return data
             except Exception:
-                return {}
+                self._send_json({"ok": False, "error": "invalid json body"}, status=400)
+                return None
+
+        def _read_mutation_json(self):
+            content_type = self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+            if content_type != "application/json":
+                self._send_json({"ok": False, "error": "content type must be application/json"}, status=400)
+                return None
+            data = self._read_json()
+            if data is None:
+                return None
+            token = self.headers.get("X-CSRF-Token") or data.get("csrf_token")
+            if token != state.get("csrf_token"):
+                self._send_json({"ok": False, "error": "invalid csrf token"}, status=403)
+                return None
+            return data
 
         def _send_json(self, payload, status=200):
             body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -282,33 +321,37 @@ def make_manage_handler(state):
             self.wfile.write(body)
 
         def do_GET(self):
-            if self.path == "/":
-                self._send_html(CLIENT_MANAGE_HTML)
-            elif self.path == "/api/status":
+            path = self._route_path()
+            if path == "/":
+                self._send_html(CLIENT_MANAGE_HTML.replace("__CSRF_TOKEN__", state["csrf_token"]))
+            elif path == "/api/status":
                 self._send_json({"ok": True, "data": client_status_payload(state)})
-            elif self.path == "/api/earnings":
+            elif path == "/api/earnings":
                 self._send_json({"ok": True, "data": [], "message": "收益接口将在后续任务完成"})
-            elif self.path == "/api/withdrawals":
+            elif path == "/api/withdrawals":
                 self._send_json({"ok": True, "data": [], "message": "提现接口将在后续任务完成"})
             else:
                 self._send_json({"ok": False, "error": "not found"}, status=404)
 
         def do_POST(self):
-            if self.path == "/api/storage":
-                data = self._read_json()
+            path = self._route_path()
+            data = self._read_mutation_json()
+            if data is None:
+                return
+            if path == "/api/storage":
                 storage_dir = str(data.get("storage_dir") or data.get("path") or "").strip()
                 if storage_dir:
                     state["storage_dir"] = storage_dir
                 state["storage"] = inspect_storage_dir(state["storage_dir"])
                 self._send_json({"ok": True, "data": client_status_payload(state)})
-            elif self.path == "/api/refresh":
+            elif path == "/api/refresh":
                 state["storage"] = inspect_storage_dir(state["storage_dir"])
                 self._send_json({"ok": True, "data": client_status_payload(state)})
-            elif self.path == "/api/control/stop":
+            elif path == "/api/control/stop":
                 self._send_json({"ok": True, "message": "停止节点将在后续任务完成"})
-            elif self.path == "/api/control/restart":
+            elif path == "/api/control/restart":
                 self._send_json({"ok": True, "message": "重启节点将在后续任务完成"})
-            elif self.path == "/api/withdrawals":
+            elif path == "/api/withdrawals":
                 self._send_json({"ok": True, "message": "提交提现将在后续任务完成"})
             else:
                 self._send_json({"ok": False, "error": "not found"}, status=404)
