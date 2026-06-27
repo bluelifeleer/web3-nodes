@@ -1466,6 +1466,17 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertEqual(record["storage_used_gb"], 128)
         self.assertEqual(record["storage_free_gb"], 384)
 
+        null_record = server_main.format_node_record((
+            "NODE_B", "INVITE2", "", 1, 2, 3, now, "", "",
+            None, None, None, None, None, None,
+        ))
+        self.assertEqual(null_record["storage_path"], "")
+        self.assertEqual(null_record["storage_status"], "unknown")
+        self.assertEqual(null_record["storage_error"], "")
+        self.assertEqual(null_record["storage_total_gb"], 0)
+        self.assertEqual(null_record["storage_used_gb"], 1)
+        self.assertEqual(null_record["storage_free_gb"], 0)
+
     def test_admin_page_renders_capacity_and_withdrawal_sections(self):
         server_main = load_server_main(ADMIN_API_TOKEN="secret-token")
 
