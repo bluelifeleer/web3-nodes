@@ -2,6 +2,7 @@
 node_config.json
 chunk_tmp/
 node_storage/
+.superpowers/
 dist/
 build/
 *.spec
