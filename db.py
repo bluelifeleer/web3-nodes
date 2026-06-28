@@ -133,7 +133,11 @@ def should_ignore_mysql_init_error(statement, exc):
         return False
     normalized = statement.strip().lower()
     duplicate_column = (
-        normalized.startswith("alter table `file_chain_record` add column")
+        (
+            normalized.startswith("alter table `file_chain_record` add column")
+            or normalized.startswith("alter table file_chain_record add column")
+            or normalized.startswith("alter table node_power add column")
+        )
         and mysql_duplicate_column_error(exc)
     )
     duplicate_owner_index = (
@@ -307,6 +311,8 @@ SCHEMA_MIGRATIONS = [
     "ALTER TABLE node_power ADD COLUMN storage_total_gb float DEFAULT 0",
     "ALTER TABLE node_power ADD COLUMN storage_used_gb float DEFAULT 0",
     "ALTER TABLE node_power ADD COLUMN storage_free_gb float DEFAULT 0",
+    "ALTER TABLE node_power ADD COLUMN storage_quota_gb float DEFAULT 0",
+    "ALTER TABLE node_power ADD COLUMN storage_available_gb float DEFAULT 0",
     "ALTER TABLE file_chain_record ADD COLUMN visibility varchar(16) DEFAULT 'public' COMMENT 'public公开 private凭token访问'",
     "ALTER TABLE file_chain_record ADD COLUMN access_token varchar(64) DEFAULT '' COMMENT '私有文件访问令牌'",
     "ALTER TABLE file_chain_record ADD COLUMN deleted_at datetime DEFAULT NULL COMMENT '软删除时间'",
@@ -315,6 +321,39 @@ SCHEMA_MIGRATIONS = [
     "ALTER TABLE file_chain_record ADD COLUMN download_count int DEFAULT 0",
     "ALTER TABLE file_chain_record ADD COLUMN last_download_at datetime DEFAULT NULL",
     "CREATE INDEX idx_file_chain_owner ON file_chain_record (owner_user_id)",
+    """CREATE TABLE IF NOT EXISTS file_shard_record (
+  id int NOT NULL AUTO_INCREMENT,
+  file_hash varchar(128) NOT NULL,
+  encrypted_hash varchar(128) DEFAULT '',
+  chunk_index int NOT NULL,
+  chunk_total int NOT NULL,
+  chunk_hash varchar(128) NOT NULL,
+  chunk_size int DEFAULT 0,
+  node_address varchar(128) DEFAULT '',
+  storage_status varchar(32) DEFAULT 'pending',
+  stored_at datetime DEFAULT NULL,
+  last_verified_at datetime DEFAULT NULL,
+  error_message varchar(255) DEFAULT '',
+  PRIMARY KEY (id),
+  KEY idx_file_shard_file (file_hash),
+  KEY idx_file_shard_node (node_address)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4""",
+    """CREATE TABLE IF NOT EXISTS storage_audit_log (
+  id int NOT NULL AUTO_INCREMENT,
+  event_type varchar(64) NOT NULL,
+  file_hash varchar(128) DEFAULT '',
+  chunk_index int DEFAULT NULL,
+  node_address varchar(128) DEFAULT '',
+  request_id varchar(64) DEFAULT '',
+  status varchar(32) DEFAULT '',
+  message varchar(255) DEFAULT '',
+  metadata_json text,
+  created_at datetime DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY idx_storage_audit_file (file_hash),
+  KEY idx_storage_audit_node (node_address),
+  KEY idx_storage_audit_event (event_type)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4""",
     *USER_PRODUCT_MYSQL_TABLES,
     "CREATE INDEX idx_wallet_nonce_address ON wallet_nonce (wallet_address)",
     "CREATE INDEX idx_file_share_file ON file_share (file_hash)",
@@ -342,6 +381,8 @@ POSTGRES_SCHEMA_MIGRATIONS = [
     "ALTER TABLE node_power ADD COLUMN IF NOT EXISTS storage_total_gb double precision DEFAULT 0",
     "ALTER TABLE node_power ADD COLUMN IF NOT EXISTS storage_used_gb double precision DEFAULT 0",
     "ALTER TABLE node_power ADD COLUMN IF NOT EXISTS storage_free_gb double precision DEFAULT 0",
+    "ALTER TABLE node_power ADD COLUMN IF NOT EXISTS storage_quota_gb double precision DEFAULT 0",
+    "ALTER TABLE node_power ADD COLUMN IF NOT EXISTS storage_available_gb double precision DEFAULT 0",
     "ALTER TABLE file_chain_record ADD COLUMN IF NOT EXISTS visibility varchar(16) DEFAULT 'public'",
     "ALTER TABLE file_chain_record ADD COLUMN IF NOT EXISTS access_token varchar(64) DEFAULT ''",
     "ALTER TABLE file_chain_record ADD COLUMN IF NOT EXISTS deleted_at timestamp DEFAULT NULL",
@@ -350,6 +391,37 @@ POSTGRES_SCHEMA_MIGRATIONS = [
     "ALTER TABLE file_chain_record ADD COLUMN IF NOT EXISTS download_count integer DEFAULT 0",
     "ALTER TABLE file_chain_record ADD COLUMN IF NOT EXISTS last_download_at timestamp DEFAULT NULL",
     "CREATE INDEX IF NOT EXISTS idx_file_chain_owner ON file_chain_record (owner_user_id)",
+    """CREATE TABLE IF NOT EXISTS file_shard_record (
+  id SERIAL PRIMARY KEY,
+  file_hash varchar(128) NOT NULL,
+  encrypted_hash varchar(128) DEFAULT '',
+  chunk_index integer NOT NULL,
+  chunk_total integer NOT NULL,
+  chunk_hash varchar(128) NOT NULL,
+  chunk_size integer DEFAULT 0,
+  node_address varchar(128) DEFAULT '',
+  storage_status varchar(32) DEFAULT 'pending',
+  stored_at timestamp DEFAULT NULL,
+  last_verified_at timestamp DEFAULT NULL,
+  error_message varchar(255) DEFAULT ''
+)""",
+    "CREATE INDEX IF NOT EXISTS idx_file_shard_file ON file_shard_record (file_hash)",
+    "CREATE INDEX IF NOT EXISTS idx_file_shard_node ON file_shard_record (node_address)",
+    """CREATE TABLE IF NOT EXISTS storage_audit_log (
+  id SERIAL PRIMARY KEY,
+  event_type varchar(64) NOT NULL,
+  file_hash varchar(128) DEFAULT '',
+  chunk_index integer DEFAULT NULL,
+  node_address varchar(128) DEFAULT '',
+  request_id varchar(64) DEFAULT '',
+  status varchar(32) DEFAULT '',
+  message varchar(255) DEFAULT '',
+  metadata_json text,
+  created_at timestamp DEFAULT CURRENT_TIMESTAMP
+)""",
+    "CREATE INDEX IF NOT EXISTS idx_storage_audit_file ON storage_audit_log (file_hash)",
+    "CREATE INDEX IF NOT EXISTS idx_storage_audit_node ON storage_audit_log (node_address)",
+    "CREATE INDEX IF NOT EXISTS idx_storage_audit_event ON storage_audit_log (event_type)",
     *USER_PRODUCT_POSTGRESQL_TABLES,
     "CREATE INDEX IF NOT EXISTS idx_wallet_nonce_address ON wallet_nonce (wallet_address)",
     "CREATE INDEX IF NOT EXISTS idx_file_share_file ON file_share (file_hash)",

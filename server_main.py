@@ -193,6 +193,35 @@ class DatabaseTransaction:
         return False
 
 
+def insert_storage_audit_log(
+    event_type,
+    file_hash="",
+    chunk_index=None,
+    node_address="",
+    request_id="",
+    status="",
+    message="",
+    metadata=None,
+):
+    metadata_json = json.dumps(metadata or {}, ensure_ascii=False, sort_keys=True)
+    current_cursor().execute(
+        """
+        insert into storage_audit_log(event_type,file_hash,chunk_index,node_address,request_id,status,message,metadata_json)
+        values(%s,%s,%s,%s,%s,%s,%s,%s)
+        """,
+        (
+            str(event_type or "")[:64],
+            str(file_hash or "")[:128],
+            chunk_index,
+            str(node_address or "")[:128],
+            str(request_id or "")[:64],
+            str(status or "")[:32],
+            str(message or "")[:255],
+            metadata_json,
+        ),
+    )
+
+
 def duplicate_database_error(exc):
     text = " ".join(str(part) for part in (exc.__class__.__name__, exc))
     text = text.lower()
@@ -1403,13 +1432,15 @@ def node_heartbeat():
     storage_total_gb = float(data.get("storage_total_gb") or 0)
     storage_used_gb = float(data.get("storage_used_gb") or disk_used or 0)
     storage_free_gb = float(data.get("storage_free_gb") or 0)
+    storage_quota_gb = float(data.get("storage_quota_gb") or 0)
+    storage_available_gb = float(data.get("storage_available_gb") or 0)
 
     # 输入心跳数据
     print(f"{user_addr} {node_mac} {disk_used} {upload_bw}")
 
     current_cursor().execute(
-        "update node_power set disk_used=%s,upload_bandwidth=%s,storage_path=%s,storage_status=%s,storage_error=%s,storage_total_gb=%s,storage_used_gb=%s,storage_free_gb=%s,online_duration=online_duration+1,update_time=%s where user_address=%s and node_mac=%s",
-        (disk_used,upload_bw,storage_path,storage_status,storage_error,storage_total_gb,storage_used_gb,storage_free_gb,datetime.now(),user_addr,node_mac)
+        "update node_power set disk_used=%s,upload_bandwidth=%s,storage_path=%s,storage_status=%s,storage_error=%s,storage_total_gb=%s,storage_used_gb=%s,storage_free_gb=%s,storage_quota_gb=%s,storage_available_gb=%s,online_duration=online_duration+1,update_time=%s where user_address=%s and node_mac=%s",
+        (disk_used,upload_bw,storage_path,storage_status,storage_error,storage_total_gb,storage_used_gb,storage_free_gb,storage_quota_gb,storage_available_gb,datetime.now(),user_addr,node_mac)
     )
     return jsonify({"code":200,"msg":"心跳上报成功"})
 

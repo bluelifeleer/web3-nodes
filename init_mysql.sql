@@ -25,6 +25,8 @@ CREATE TABLE IF NOT EXISTS `node_power` (
   `storage_total_gb` float DEFAULT 0,
   `storage_used_gb` float DEFAULT 0,
   `storage_free_gb` float DEFAULT 0,
+  `storage_quota_gb` float DEFAULT 0,
+  `storage_available_gb` float DEFAULT 0,
   `online_duration` int DEFAULT 0 COMMENT '当日在线时长分钟',
   `upload_bandwidth` float DEFAULT 0 COMMENT '当日上行流量',
   `update_time` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -83,6 +85,41 @@ ALTER TABLE `file_chain_record` ADD COLUMN `owner_wallet_address` varchar(128) D
 ALTER TABLE `file_chain_record` ADD COLUMN `download_count` int DEFAULT 0;
 ALTER TABLE `file_chain_record` ADD COLUMN `last_download_at` datetime DEFAULT NULL;
 CREATE INDEX idx_file_chain_owner ON `file_chain_record` (`owner_user_id`);
+
+CREATE TABLE IF NOT EXISTS `file_shard_record` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `file_hash` varchar(128) NOT NULL,
+  `encrypted_hash` varchar(128) DEFAULT '',
+  `chunk_index` int NOT NULL,
+  `chunk_total` int NOT NULL,
+  `chunk_hash` varchar(128) NOT NULL,
+  `chunk_size` int DEFAULT 0,
+  `node_address` varchar(128) DEFAULT '',
+  `storage_status` varchar(32) DEFAULT 'pending',
+  `stored_at` datetime DEFAULT NULL,
+  `last_verified_at` datetime DEFAULT NULL,
+  `error_message` varchar(255) DEFAULT '',
+  PRIMARY KEY (`id`),
+  KEY `idx_file_shard_file` (`file_hash`),
+  KEY `idx_file_shard_node` (`node_address`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS `storage_audit_log` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `event_type` varchar(64) NOT NULL,
+  `file_hash` varchar(128) DEFAULT '',
+  `chunk_index` int DEFAULT NULL,
+  `node_address` varchar(128) DEFAULT '',
+  `request_id` varchar(64) DEFAULT '',
+  `status` varchar(32) DEFAULT '',
+  `message` varchar(255) DEFAULT '',
+  `metadata_json` text,
+  `created_at` datetime DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_storage_audit_file` (`file_hash`),
+  KEY `idx_storage_audit_node` (`node_address`),
+  KEY `idx_storage_audit_event` (`event_type`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS `app_user` (
   `id` int NOT NULL AUTO_INCREMENT,

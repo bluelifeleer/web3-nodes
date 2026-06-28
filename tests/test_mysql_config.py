@@ -1043,6 +1043,48 @@ class MysqlConfigTest(unittest.TestCase):
             self.assertIn(column, mysql_migrations)
             self.assertIn(column, postgres_migrations)
 
+    def test_shard_and_audit_schema_exist(self):
+        mysql_sql = Path("init_mysql.sql").read_text(encoding="utf-8")
+        postgres_sql = Path("init_postgresql.sql").read_text(encoding="utf-8")
+        mysql_server = load_server_main(DB_ENGINE="mysql")
+        postgres_server = load_server_main(DB_ENGINE="postgresql")
+        mysql_migrations = "\n".join(mysql_server.database_module.SCHEMA_MIGRATIONS)
+        postgres_migrations = "\n".join(postgres_server.database_module.POSTGRES_SCHEMA_MIGRATIONS)
+
+        for text in (mysql_sql, postgres_sql, mysql_migrations, postgres_migrations):
+            self.assertIn("file_shard_record", text)
+            self.assertIn("storage_audit_log", text)
+            self.assertIn("storage_quota_gb", text)
+            self.assertIn("storage_available_gb", text)
+
+    def test_insert_storage_audit_log_writes_expected_fields(self):
+        server_main = load_server_main()
+        executed = []
+
+        class FakeCursor:
+            def execute(self, sql, params=None):
+                executed.append((sql, params))
+
+        server_main.cursor = FakeCursor()
+        server_main.insert_storage_audit_log(
+            "shard.write.success",
+            file_hash="a" * 64,
+            chunk_index=2,
+            node_address="NODE_A",
+            request_id="REQ1",
+            status="ok",
+            message="stored",
+            metadata={"chunk_hash": "b" * 64},
+        )
+
+        self.assertEqual(len(executed), 1)
+        sql, params = executed[0]
+        self.assertIn("insert into storage_audit_log", sql.lower())
+        self.assertIn("shard.write.success", params)
+        self.assertIn("a" * 64, params)
+        self.assertIn("NODE_A", params)
+        self.assertIn("REQ1", params)
+
     def test_heartbeat_stores_capacity_fields_and_allows_old_payloads(self):
         server_main = load_server_main()
         executed = []

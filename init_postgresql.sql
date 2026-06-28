@@ -21,6 +21,8 @@ CREATE TABLE IF NOT EXISTS node_power (
   storage_total_gb double precision DEFAULT 0,
   storage_used_gb double precision DEFAULT 0,
   storage_free_gb double precision DEFAULT 0,
+  storage_quota_gb double precision DEFAULT 0,
+  storage_available_gb double precision DEFAULT 0,
   online_duration integer DEFAULT 0,
   upload_bandwidth double precision DEFAULT 0,
   update_time timestamp DEFAULT CURRENT_TIMESTAMP
@@ -80,6 +82,41 @@ ALTER TABLE file_chain_record ADD COLUMN IF NOT EXISTS owner_wallet_address varc
 ALTER TABLE file_chain_record ADD COLUMN IF NOT EXISTS download_count integer DEFAULT 0;
 ALTER TABLE file_chain_record ADD COLUMN IF NOT EXISTS last_download_at timestamp DEFAULT NULL;
 CREATE INDEX IF NOT EXISTS idx_file_chain_owner ON file_chain_record (owner_user_id);
+
+CREATE TABLE IF NOT EXISTS file_shard_record (
+  id SERIAL PRIMARY KEY,
+  file_hash varchar(128) NOT NULL,
+  encrypted_hash varchar(128) DEFAULT '',
+  chunk_index integer NOT NULL,
+  chunk_total integer NOT NULL,
+  chunk_hash varchar(128) NOT NULL,
+  chunk_size integer DEFAULT 0,
+  node_address varchar(128) DEFAULT '',
+  storage_status varchar(32) DEFAULT 'pending',
+  stored_at timestamp DEFAULT NULL,
+  last_verified_at timestamp DEFAULT NULL,
+  error_message varchar(255) DEFAULT ''
+);
+
+CREATE INDEX IF NOT EXISTS idx_file_shard_file ON file_shard_record (file_hash);
+CREATE INDEX IF NOT EXISTS idx_file_shard_node ON file_shard_record (node_address);
+
+CREATE TABLE IF NOT EXISTS storage_audit_log (
+  id SERIAL PRIMARY KEY,
+  event_type varchar(64) NOT NULL,
+  file_hash varchar(128) DEFAULT '',
+  chunk_index integer DEFAULT NULL,
+  node_address varchar(128) DEFAULT '',
+  request_id varchar(64) DEFAULT '',
+  status varchar(32) DEFAULT '',
+  message varchar(255) DEFAULT '',
+  metadata_json text,
+  created_at timestamp DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_storage_audit_file ON storage_audit_log (file_hash);
+CREATE INDEX IF NOT EXISTS idx_storage_audit_node ON storage_audit_log (node_address);
+CREATE INDEX IF NOT EXISTS idx_storage_audit_event ON storage_audit_log (event_type);
 
 CREATE TABLE IF NOT EXISTS app_user (
     id SERIAL PRIMARY KEY,
