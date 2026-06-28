@@ -1,4 +1,5 @@
 import importlib
+import base64
 import http.client
 import io
 import json
@@ -2108,6 +2109,135 @@ class MysqlConfigTest(unittest.TestCase):
             self.assertFalse(state["heartbeat_ok"])
             self.assertEqual(state["last_heartbeat"], "")
             self.assertIn("500", state["last_error"])
+        finally:
+            sys.modules.pop("client", None)
+            if old_requests is None:
+                sys.modules.pop("requests", None)
+            else:
+                sys.modules["requests"] = old_requests
+            if old_webview is None:
+                sys.modules.pop("webview", None)
+            else:
+                sys.modules["webview"] = old_webview
+
+    def test_client_shard_write_read_round_trip(self):
+        old_requests = sys.modules.get("requests")
+        old_webview = sys.modules.get("webview")
+        try:
+            sys.modules["requests"] = types.SimpleNamespace(post=lambda *args, **kwargs: None, get=lambda *args, **kwargs: None)
+            sys.modules["webview"] = None
+            sys.modules.pop("client", None)
+            client_module = importlib.import_module("client")
+            file_hash = "a" * 64
+            chunk = b"encrypted-shard"
+            chunk_hash = client_module.hashlib.sha256(chunk).hexdigest()
+            with tempfile.TemporaryDirectory() as tmp:
+                metadata = client_module.write_local_shard(
+                    tmp,
+                    "NODE_A",
+                    "MAC_A",
+                    file_hash,
+                    0,
+                    1,
+                    chunk,
+                    chunk_hash,
+                )
+
+                self.assertEqual(metadata["chunk_hash"], chunk_hash)
+                self.assertEqual(client_module.read_local_shard(tmp, file_hash, 0), chunk)
+                manifest = client_module.read_local_manifest(tmp, file_hash)
+                self.assertEqual(manifest["chunks"]["0"]["chunk_size"], len(chunk))
+        finally:
+            sys.modules.pop("client", None)
+            if old_requests is None:
+                sys.modules.pop("requests", None)
+            else:
+                sys.modules["requests"] = old_requests
+            if old_webview is None:
+                sys.modules.pop("webview", None)
+            else:
+                sys.modules["webview"] = old_webview
+
+    def test_client_shard_path_rejects_invalid_hash_and_index(self):
+        old_requests = sys.modules.get("requests")
+        old_webview = sys.modules.get("webview")
+        try:
+            sys.modules["requests"] = types.SimpleNamespace(post=lambda *args, **kwargs: None, get=lambda *args, **kwargs: None)
+            sys.modules["webview"] = None
+            sys.modules.pop("client", None)
+            client_module = importlib.import_module("client")
+            with tempfile.TemporaryDirectory() as tmp:
+                with self.assertRaises(ValueError):
+                    client_module.write_local_shard(tmp, "NODE_A", "MAC_A", "../bad", 0, 1, b"x")
+                with self.assertRaises(ValueError):
+                    client_module.write_local_shard(tmp, "NODE_A", "MAC_A", "a" * 64, -1, 1, b"x")
+        finally:
+            sys.modules.pop("client", None)
+            if old_requests is None:
+                sys.modules.pop("requests", None)
+            else:
+                sys.modules["requests"] = old_requests
+            if old_webview is None:
+                sys.modules.pop("webview", None)
+            else:
+                sys.modules["webview"] = old_webview
+
+    def test_client_management_storage_shard_routes_round_trip(self):
+        old_requests = sys.modules.get("requests")
+        old_webview = sys.modules.get("webview")
+        try:
+            sys.modules["requests"] = types.SimpleNamespace(post=lambda *args, **kwargs: None, get=lambda *args, **kwargs: None)
+            sys.modules["webview"] = None
+            sys.modules.pop("client", None)
+            client_module = importlib.import_module("client")
+            file_hash = "b" * 64
+            chunk = b"route-shard"
+            chunk_hash = client_module.hashlib.sha256(chunk).hexdigest()
+            with tempfile.TemporaryDirectory() as tmp:
+                state = client_module.create_client_state(
+                    "http://server",
+                    "NODE_A",
+                    "MAC_A",
+                    tmp,
+                    8787,
+                    10,
+                    True,
+                )
+                server = client_module.ThreadingHTTPServer(
+                    ("127.0.0.1", 0),
+                    client_module.make_manage_handler(state),
+                )
+                thread = client_module.threading.Thread(target=server.serve_forever, daemon=True)
+                thread.start()
+                base_url = f"http://127.0.0.1:{server.server_port}"
+                try:
+                    write_request = urllib.request.Request(
+                        f"{base_url}/api/node/storage/shards",
+                        data=json.dumps({
+                            "file_hash": file_hash,
+                            "chunk_index": 0,
+                            "chunk_total": 1,
+                            "chunk_b64": base64.b64encode(chunk).decode("ascii"),
+                            "chunk_hash": chunk_hash,
+                        }).encode("utf-8"),
+                        headers={"Content-Type": "application/json", "X-CSRF-Token": state["csrf_token"]},
+                        method="POST",
+                    )
+                    with urllib.request.urlopen(write_request, timeout=5) as response:
+                        write_payload = json.loads(response.read().decode("utf-8"))
+                    self.assertTrue(write_payload["ok"])
+
+                    with urllib.request.urlopen(
+                        f"{base_url}/api/node/storage/shards/{file_hash}/0",
+                        timeout=5,
+                    ) as response:
+                        read_payload = json.loads(response.read().decode("utf-8"))
+                    self.assertEqual(base64.b64decode(read_payload["data"]["chunk_b64"]), chunk)
+                    self.assertEqual(read_payload["data"]["chunk_hash"], chunk_hash)
+                finally:
+                    server.shutdown()
+                    server.server_close()
+                    thread.join(timeout=5)
         finally:
             sys.modules.pop("client", None)
             if old_requests is None:

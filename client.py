@@ -10,6 +10,7 @@ import shutil
 import tempfile
 import threading
 import secrets
+import base64
 from pathlib import Path
 import os
 import json
@@ -650,6 +651,99 @@ def prepare_storage_root(storage_dir, user_addr, node_mac):
     }
 
 
+def validate_file_hash_value(file_hash):
+    value = str(file_hash or "").strip().lower()
+    if len(value) != 64 or any(ch not in "0123456789abcdef" for ch in value):
+        raise ValueError("invalid file_hash")
+    return value
+
+
+def validate_chunk_index(chunk_index):
+    try:
+        value = int(chunk_index)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("invalid chunk_index") from exc
+    if value < 0:
+        raise ValueError("invalid chunk_index")
+    return value
+
+
+def shard_file_path(storage_dir, file_hash, chunk_index):
+    safe_hash = validate_file_hash_value(file_hash)
+    safe_index = validate_chunk_index(chunk_index)
+    store_dir = storage_store_dir(storage_dir)
+    file_dir = (store_dir / "files" / safe_hash).resolve()
+    base_dir = (store_dir / "files").resolve()
+    if base_dir != file_dir and base_dir not in file_dir.parents:
+        raise ValueError("invalid shard path")
+    return file_dir / f"{safe_index}.part"
+
+
+def manifest_file_path(storage_dir, file_hash):
+    safe_hash = validate_file_hash_value(file_hash)
+    manifest_dir = (storage_store_dir(storage_dir) / "manifest").resolve()
+    manifest_path = (manifest_dir / f"{safe_hash}.json").resolve()
+    if manifest_dir != manifest_path.parent:
+        raise ValueError("invalid manifest path")
+    return manifest_path
+
+
+def read_local_manifest(storage_dir, file_hash):
+    manifest_path = manifest_file_path(storage_dir, file_hash)
+    if not manifest_path.exists():
+        return {
+            "file_hash": validate_file_hash_value(file_hash),
+            "chunks": {},
+        }
+    try:
+        data = json.loads(manifest_path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {"file_hash": validate_file_hash_value(file_hash), "chunks": {}}
+    except Exception:
+        return {
+            "file_hash": validate_file_hash_value(file_hash),
+            "chunks": {},
+        }
+
+
+def write_local_shard(storage_dir, user_addr, node_mac, file_hash, chunk_index, chunk_total, chunk_bytes, chunk_hash=""):
+    safe_hash = validate_file_hash_value(file_hash)
+    safe_index = validate_chunk_index(chunk_index)
+    safe_total = int(chunk_total)
+    if safe_total <= 0 or safe_index >= safe_total:
+        raise ValueError("invalid chunk_total")
+    if not isinstance(chunk_bytes, (bytes, bytearray)):
+        raise ValueError("chunk bytes required")
+    computed_hash = hashlib.sha256(bytes(chunk_bytes)).hexdigest()
+    if chunk_hash and computed_hash != str(chunk_hash).lower():
+        raise ValueError("chunk hash mismatch")
+    prepare_storage_root(storage_dir, user_addr, node_mac)
+    shard_path = shard_file_path(storage_dir, safe_hash, safe_index)
+    shard_path.parent.mkdir(parents=True, exist_ok=True)
+    shard_path.write_bytes(bytes(chunk_bytes))
+    manifest = read_local_manifest(storage_dir, safe_hash)
+    manifest["file_hash"] = safe_hash
+    manifest["chunk_total"] = safe_total
+    manifest.setdefault("chunks", {})
+    manifest["chunks"][str(safe_index)] = {
+        "chunk_index": safe_index,
+        "chunk_total": safe_total,
+        "chunk_hash": computed_hash,
+        "chunk_size": len(chunk_bytes),
+        "stored_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    manifest_path = manifest_file_path(storage_dir, safe_hash)
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    return dict(manifest["chunks"][str(safe_index)], file_hash=safe_hash)
+
+
+def read_local_shard(storage_dir, file_hash, chunk_index):
+    shard_path = shard_file_path(storage_dir, file_hash, chunk_index)
+    if not shard_path.exists():
+        raise FileNotFoundError("shard not found")
+    return shard_path.read_bytes()
+
+
 def get_directory_size_bytes(path):
     total = 0
     for file_path in path.rglob("*"):
@@ -724,6 +818,13 @@ def inspect_storage_dir(storage_dir, user_addr="", node_mac="", storage_quota_gb
         }
 
 
+def inspect_storage_state(storage_dir, user_addr="", node_mac="", storage_quota_gb=0):
+    try:
+        return inspect_storage_dir(storage_dir, user_addr, node_mac, storage_quota_gb)
+    except TypeError:
+        return inspect_storage_dir(storage_dir)
+
+
 def create_client_state(server_url, user_addr, node_mac, storage_dir, manage_port, storage_quota_gb=0, storage_explicit=True):
     return {
         "server_url": server_url,
@@ -740,7 +841,7 @@ def create_client_state(server_url, user_addr, node_mac, storage_dir, manage_por
         "last_heartbeat": "",
         "last_error": "",
         "last_notice": "",
-        "storage": inspect_storage_dir(storage_dir, user_addr, node_mac, storage_quota_gb),
+        "storage": inspect_storage_state(storage_dir, user_addr, node_mac, storage_quota_gb),
     }
 
 
@@ -761,7 +862,7 @@ def client_status_payload(state):
 
 
 def build_heartbeat_payload(state, upload_bw):
-    storage_info = inspect_storage_dir(
+    storage_info = inspect_storage_state(
         state["storage_dir"],
         state.get("user_addr", ""),
         state.get("node_mac", ""),
@@ -1010,6 +1111,38 @@ def make_manage_handler(state):
                 self._send_html(CLIENT_MANAGE_HTML.replace("__CSRF_TOKEN__", state["csrf_token"]))
             elif path == "/api/status":
                 self._send_json({"ok": True, "data": client_status_payload(state)})
+            elif path.startswith("/api/node/storage/shards/"):
+                parts = path.strip("/").split("/")
+                if len(parts) != 6:
+                    self._send_json({"ok": False, "error": "invalid shard path"}, status=400)
+                    return
+                try:
+                    file_hash = parts[4]
+                    chunk_index = parts[5]
+                    chunk = read_local_shard(state["storage_dir"], file_hash, chunk_index)
+                    chunk_hash = hashlib.sha256(chunk).hexdigest()
+                    self._send_json({
+                        "ok": True,
+                        "data": {
+                            "file_hash": validate_file_hash_value(file_hash),
+                            "chunk_index": validate_chunk_index(chunk_index),
+                            "chunk_hash": chunk_hash,
+                            "chunk_b64": base64.b64encode(chunk).decode("ascii"),
+                        },
+                    })
+                except FileNotFoundError:
+                    self._send_json({"ok": False, "error": "shard not found"}, status=404)
+                except Exception as exc:
+                    self._send_json({"ok": False, "error": str(exc)}, status=400)
+            elif path.startswith("/api/node/storage/files/") and path.endswith("/manifest"):
+                parts = path.strip("/").split("/")
+                if len(parts) != 6:
+                    self._send_json({"ok": False, "error": "invalid manifest path"}, status=400)
+                    return
+                try:
+                    self._send_json({"ok": True, "data": read_local_manifest(state["storage_dir"], parts[4])})
+                except Exception as exc:
+                    self._send_json({"ok": False, "error": str(exc)}, status=400)
             elif path == "/api/earnings":
                 status_code, payload = proxy_node_get(state, "/api/node/earnings")
                 self._send_json(payload, status=status_code)
@@ -1026,14 +1159,48 @@ def make_manage_handler(state):
             data = self._read_mutation_json()
             if data is None:
                 return
-            if path == "/api/storage":
+            if path == "/api/node/storage/shards":
+                try:
+                    chunk_bytes = base64.b64decode(str(data.get("chunk_b64") or ""), validate=True)
+                    metadata = write_local_shard(
+                        state["storage_dir"],
+                        state["user_addr"],
+                        state["node_mac"],
+                        data.get("file_hash"),
+                        data.get("chunk_index"),
+                        data.get("chunk_total"),
+                        chunk_bytes,
+                        data.get("chunk_hash") or "",
+                    )
+                    state["storage"] = inspect_storage_state(
+                        state["storage_dir"],
+                        state.get("user_addr", ""),
+                        state.get("node_mac", ""),
+                        state.get("storage_quota_gb", 0),
+                    )
+                    self._send_json({"ok": True, "data": metadata})
+                except Exception as exc:
+                    self._send_json({"ok": False, "error": str(exc)}, status=400)
+            elif path == "/api/storage":
                 storage_dir = str(data.get("storage_dir") or data.get("path") or "").strip()
                 if storage_dir:
                     state["storage_dir"] = storage_dir
-                state["storage"] = inspect_storage_dir(state["storage_dir"])
+                if "storage_quota_gb" in data:
+                    state["storage_quota_gb"] = float(data.get("storage_quota_gb") or 0)
+                state["storage"] = inspect_storage_state(
+                    state["storage_dir"],
+                    state.get("user_addr", ""),
+                    state.get("node_mac", ""),
+                    state.get("storage_quota_gb", 0),
+                )
                 self._send_json({"ok": True, "data": client_status_payload(state)})
             elif path == "/api/refresh":
-                state["storage"] = inspect_storage_dir(state["storage_dir"])
+                state["storage"] = inspect_storage_state(
+                    state["storage_dir"],
+                    state.get("user_addr", ""),
+                    state.get("node_mac", ""),
+                    state.get("storage_quota_gb", 0),
+                )
                 self._send_json({"ok": True, "data": client_status_payload(state)})
             elif path == "/api/control/stop":
                 self._send_json(stop_client_from_console(state))
