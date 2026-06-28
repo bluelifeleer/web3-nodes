@@ -10,6 +10,7 @@ from pathlib import Path
 import re
 import secrets
 import urllib.parse
+import base64
 import auth
 import points
 import shares
@@ -734,17 +735,85 @@ def storage_node_file_path(file_hash, node):
     return node_dir / f"{file_hash}.bin"
 
 
-def persist_file_to_storage_nodes(file_hash, encrypted_data, nodes):
+def build_encrypted_shard_manifest(file_hash, encrypted_data):
+    encrypted_hash = hashlib.sha256(encrypted_data).hexdigest()
+    shards = []
+    for index, shard_bytes in enumerate(file_shard(encrypted_data)):
+        shards.append({
+            "file_hash": file_hash,
+            "encrypted_hash": encrypted_hash,
+            "chunk_index": index,
+            "chunk_total": 0,
+            "chunk_hash": hashlib.sha256(shard_bytes).hexdigest(),
+            "chunk_size": len(shard_bytes),
+            "chunk_bytes": shard_bytes,
+        })
+    chunk_total = len(shards)
+    for shard in shards:
+        shard["chunk_total"] = chunk_total
+    return {
+        "file_hash": file_hash,
+        "encrypted_hash": encrypted_hash,
+        "shards": shards,
+    }
+
+
+def write_server_fallback_copy(file_hash, encrypted_data):
+    target = storage_node_file_path(file_hash, "SERVER_BACKUP_NODE")
+    if target is None:
+        raise RuntimeError("服务端兜底存储路径无效")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(encrypted_data)
+    return "SERVER_BACKUP_NODE"
+
+
+def get_node_storage_api_url(node):
+    raw = str(node or "").strip()
+    if raw.startswith("http://") or raw.startswith("https://"):
+        return raw.rstrip("/")
+    template = os.getenv("NODE_STORAGE_API_URL_TEMPLATE", "").strip()
+    if template:
+        return template.format(node_address=urllib.parse.quote(raw)).rstrip("/")
+    return ""
+
+
+def post_client_shard(node, shard, request_id=""):
+    base_url = get_node_storage_api_url(node)
+    if not base_url:
+        return False
+    payload = {
+        "file_hash": shard["file_hash"],
+        "chunk_index": shard["chunk_index"],
+        "chunk_total": shard["chunk_total"],
+        "chunk_hash": shard["chunk_hash"],
+        "chunk_b64": base64.b64encode(shard["chunk_bytes"]).decode("ascii"),
+        "request_id": request_id,
+    }
+    try:
+        response = requests.post(
+            f"{base_url}/api/node/storage/shards",
+            json=payload,
+            timeout=15,
+        )
+        return int(getattr(response, "status_code", 500) or 500) < 400
+    except Exception:
+        return False
+
+
+def persist_file_to_storage_nodes(file_hash, encrypted_data, nodes, request_id=""):
+    write_server_fallback_copy(file_hash, encrypted_data)
+    real_nodes = real_user_storage_nodes(nodes)
+    manifest = build_encrypted_shard_manifest(file_hash, encrypted_data)
     stored_nodes = []
-    for node in nodes:
-        target = storage_node_file_path(file_hash, node)
-        if target is None:
-            continue
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(encrypted_data)
-        stored_nodes.append(node)
+    if not real_nodes:
+        raise RuntimeError("暂无可用真实客户端节点")
+    for shard in manifest["shards"]:
+        node = real_nodes[shard["chunk_index"] % len(real_nodes)]
+        if post_client_shard(node, shard, request_id=request_id):
+            if node not in stored_nodes:
+                stored_nodes.append(node)
     if not stored_nodes:
-        raise RuntimeError("暂无可用用户节点")
+        raise RuntimeError("暂无可用真实客户端节点")
     return stored_nodes
 
 

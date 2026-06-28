@@ -3813,6 +3813,48 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertIn("文件已存在", response.get_json()["msg"])
         self.assertFalse(ipfs_called)
 
+    def test_build_encrypted_shard_manifest_records_hashes(self):
+        server_main = load_server_main()
+        old_shard_size = server_main.SHARD_SIZE
+        try:
+            server_main.SHARD_SIZE = 4
+            encrypted = b"abcdefghij"
+            manifest = server_main.build_encrypted_shard_manifest("a" * 64, encrypted)
+
+            self.assertEqual(manifest["file_hash"], "a" * 64)
+            self.assertEqual(manifest["encrypted_hash"], server_main.hashlib.sha256(encrypted).hexdigest())
+            self.assertEqual(len(manifest["shards"]), 3)
+            self.assertEqual(manifest["shards"][0]["chunk_hash"], server_main.hashlib.sha256(b"abcd").hexdigest())
+            self.assertEqual(manifest["shards"][2]["chunk_size"], 2)
+        finally:
+            server_main.SHARD_SIZE = old_shard_size
+
+    def test_persist_file_to_storage_nodes_dispatches_shards_to_clients(self):
+        server_main = load_server_main()
+        old_shard_size = server_main.SHARD_SIZE
+        sent = []
+        fallback_writes = []
+        try:
+            server_main.SHARD_SIZE = 4
+            server_main.write_server_fallback_copy = lambda file_hash, encrypted_data: fallback_writes.append((file_hash, encrypted_data))
+            server_main.post_client_shard = lambda node, shard, request_id="": sent.append((node, shard["chunk_index"], shard["chunk_bytes"])) or True
+
+            stored_nodes = server_main.persist_file_to_storage_nodes("b" * 64, b"abcdefgh", ["NODE_A", "NODE_B"])
+
+            self.assertEqual(stored_nodes, ["NODE_A", "NODE_B"])
+            self.assertEqual(fallback_writes, [("b" * 64, b"abcdefgh")])
+            self.assertEqual(sent, [("NODE_A", 0, b"abcd"), ("NODE_B", 1, b"efgh")])
+        finally:
+            server_main.SHARD_SIZE = old_shard_size
+
+    def test_persist_file_to_storage_nodes_requires_real_client_success(self):
+        server_main = load_server_main()
+        server_main.write_server_fallback_copy = lambda file_hash, encrypted_data: None
+        server_main.post_client_shard = lambda node, shard, request_id="": False
+
+        with self.assertRaisesRegex(RuntimeError, "真实客户端"):
+            server_main.persist_file_to_storage_nodes("c" * 64, b"encrypted", ["NODE_A"])
+
     def test_user_file_upload_db_failure_rolls_back(self):
         auth = importlib.import_module("auth")
         server_main = load_server_main(SESSION_SECRET="session-secret")
