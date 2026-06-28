@@ -1645,6 +1645,93 @@ class MysqlConfigTest(unittest.TestCase):
             else:
                 sys.modules["webview"] = old_webview
 
+    def test_client_config_tracks_explicit_storage_and_quota(self):
+        old_requests = sys.modules.get("requests")
+        old_webview = sys.modules.get("webview")
+        empty_config_path = Path("tests/empty-node-config.json")
+        quota_config_path = Path("tests/quota-node-config.json")
+        empty_config_path.write_text("{}", encoding="utf-8")
+        quota_config_path.write_text(
+            '{"storage_dir":"D:/node","storage_quota_gb":128}',
+            encoding="utf-8",
+        )
+        try:
+            sys.modules["requests"] = types.SimpleNamespace(post=lambda *args, **kwargs: None, get=lambda *args, **kwargs: None)
+            sys.modules["webview"] = None
+            sys.modules.pop("client", None)
+            client_module = importlib.import_module("client")
+
+            empty_config = client_module.load_client_config(empty_config_path)
+            quota_config = client_module.load_client_config(quota_config_path)
+
+            self.assertFalse(empty_config["storage_explicit"])
+            self.assertEqual(empty_config["storage_quota_gb"], 0)
+            self.assertTrue(quota_config["storage_explicit"])
+            self.assertEqual(quota_config["storage_quota_gb"], 128)
+        finally:
+            empty_config_path.unlink(missing_ok=True)
+            quota_config_path.unlink(missing_ok=True)
+            sys.modules.pop("client", None)
+            if old_requests is None:
+                sys.modules.pop("requests", None)
+            else:
+                sys.modules["requests"] = old_requests
+            if old_webview is None:
+                sys.modules.pop("webview", None)
+            else:
+                sys.modules["webview"] = old_webview
+
+    def test_client_prepare_storage_root_writes_lock_and_store_dir(self):
+        old_requests = sys.modules.get("requests")
+        old_webview = sys.modules.get("webview")
+        try:
+            sys.modules["requests"] = types.SimpleNamespace(post=lambda *args, **kwargs: None, get=lambda *args, **kwargs: None)
+            sys.modules["webview"] = None
+            sys.modules.pop("client", None)
+            client_module = importlib.import_module("client")
+            with tempfile.TemporaryDirectory() as tmp:
+                result = client_module.prepare_storage_root(tmp, "NODE_A", "MAC_A")
+                lock_data = json.loads((Path(tmp) / ".web3_nodes.lock").read_text(encoding="utf-8"))
+
+                self.assertEqual(result["store_dir"], str(Path(tmp) / ".web3_nodes_store"))
+                self.assertTrue((Path(tmp) / ".web3_nodes_store").is_dir())
+                self.assertEqual(lock_data["user_addr"], "NODE_A")
+                self.assertEqual(lock_data["node_mac"], "MAC_A")
+        finally:
+            sys.modules.pop("client", None)
+            if old_requests is None:
+                sys.modules.pop("requests", None)
+            else:
+                sys.modules["requests"] = old_requests
+            if old_webview is None:
+                sys.modules.pop("webview", None)
+            else:
+                sys.modules["webview"] = old_webview
+
+    def test_client_prepare_storage_root_rejects_lock_mismatch(self):
+        old_requests = sys.modules.get("requests")
+        old_webview = sys.modules.get("webview")
+        try:
+            sys.modules["requests"] = types.SimpleNamespace(post=lambda *args, **kwargs: None, get=lambda *args, **kwargs: None)
+            sys.modules["webview"] = None
+            sys.modules.pop("client", None)
+            client_module = importlib.import_module("client")
+            with tempfile.TemporaryDirectory() as tmp:
+                client_module.prepare_storage_root(tmp, "NODE_A", "MAC_A")
+
+                with self.assertRaisesRegex(RuntimeError, "locked"):
+                    client_module.prepare_storage_root(tmp, "NODE_B", "MAC_B")
+        finally:
+            sys.modules.pop("client", None)
+            if old_requests is None:
+                sys.modules.pop("requests", None)
+            else:
+                sys.modules["requests"] = old_requests
+            if old_webview is None:
+                sys.modules.pop("webview", None)
+            else:
+                sys.modules["webview"] = old_webview
+
     def test_client_manage_port_env_and_cli_override(self):
         old_requests = sys.modules.get("requests")
         old_webview = sys.modules.get("webview")
@@ -2561,7 +2648,7 @@ class MysqlConfigTest(unittest.TestCase):
             client_module = importlib.import_module("client")
             client_module.get_local_disk_use = lambda storage_dir="": 0.1
             result = client_module.inspect_storage_dir("")
-            self.assertEqual(result["storage_status"], "unavailable")
+            self.assertEqual(result["storage_status"], "required")
             self.assertIn("storage_error", result)
         finally:
             sys.modules.pop("client", None)
@@ -2615,7 +2702,7 @@ class MysqlConfigTest(unittest.TestCase):
 
             result = client_module.inspect_storage_dir("")
 
-            self.assertEqual(result["storage_status"], "unavailable")
+            self.assertEqual(result["storage_status"], "required")
             self.assertEqual(result["storage_error"], "未指定存储目录")
             self.assertEqual(result["storage_used_gb"], 12.34)
         finally:

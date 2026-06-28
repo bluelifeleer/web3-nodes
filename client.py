@@ -28,6 +28,8 @@ HEARTBEAT_INTERVAL = 60
 RECONNECT_INTERVAL = 10
 NODE_STORAGE_DIR = ""
 MANAGE_PORT = 8787
+STORAGE_STORE_NAME = ".web3_nodes_store"
+STORAGE_LOCK_NAME = ".web3_nodes.lock"
 
 CLIENT_MANAGE_HTML = """
 <!DOCTYPE html>
@@ -506,12 +508,15 @@ def safe_print(message):
 
 
 def load_client_config(config_path="node_config.json"):
+    storage_explicit = False
     config = {
         "server_url": SERVER_URL,
         "parent_invite": PARENT_INVITE,
         "heartbeat_interval": HEARTBEAT_INTERVAL,
         "reconnect_interval": RECONNECT_INTERVAL,
         "storage_dir": NODE_STORAGE_DIR,
+        "storage_explicit": False,
+        "storage_quota_gb": 0,
         "manage_port": MANAGE_PORT,
     }
     path = Path(config_path)
@@ -519,6 +524,7 @@ def load_client_config(config_path="node_config.json"):
         try:
             file_config = json.loads(path.read_text(encoding="utf-8"))
             if isinstance(file_config, dict):
+                storage_explicit = bool(str(file_config.get("storage_dir") or "").strip())
                 config.update({key: value for key, value in file_config.items() if value not in (None, "")})
         except Exception:
             pass
@@ -526,7 +532,14 @@ def load_client_config(config_path="node_config.json"):
     config["parent_invite"] = os.getenv("NODE_PARENT_INVITE", config["parent_invite"])
     config["heartbeat_interval"] = int(os.getenv("NODE_HEARTBEAT_INTERVAL", config["heartbeat_interval"]))
     config["reconnect_interval"] = int(os.getenv("NODE_RECONNECT_INTERVAL", config["reconnect_interval"]))
-    config["storage_dir"] = os.getenv("NODE_STORAGE_DIR", config["storage_dir"])
+    env_storage_dir = os.getenv("NODE_STORAGE_DIR")
+    if env_storage_dir:
+        storage_explicit = True
+        config["storage_dir"] = env_storage_dir
+    else:
+        config["storage_dir"] = config["storage_dir"]
+    config["storage_explicit"] = storage_explicit
+    config["storage_quota_gb"] = float(os.getenv("NODE_STORAGE_QUOTA_GB", config.get("storage_quota_gb") or 0) or 0)
     config["manage_port"] = int(os.getenv("NODE_MANAGE_PORT", config["manage_port"]))
     return config
 
@@ -563,12 +576,78 @@ def get_manage_port_arg():
     return 0
 
 
+def get_storage_quota_arg():
+    for arg in sys.argv[1:]:
+        if arg.startswith("storage_quota_gb=") or arg.startswith("--storage-quota-gb=") or arg.startswith("--storage_quota_gb="):
+            return float(arg.split("=", 1)[1].strip())
+    return 0
+
+
 def ensure_storage_dir(storage_dir):
     if not storage_dir:
         return None
     path = Path(storage_dir).expanduser()
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def storage_store_dir(storage_dir):
+    path = Path(storage_dir).expanduser()
+    return path / STORAGE_STORE_NAME
+
+
+def storage_lock_path(storage_dir):
+    path = Path(storage_dir).expanduser()
+    return path / STORAGE_LOCK_NAME
+
+
+def hide_storage_store_dir(store_dir):
+    if os.name != "nt":
+        return ""
+    try:
+        subprocess.run(
+            ["attrib", "+h", "+s", str(store_dir)],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return ""
+    except Exception as exc:
+        return str(exc)
+
+
+def prepare_storage_root(storage_dir, user_addr, node_mac):
+    path = ensure_storage_dir(storage_dir)
+    if path is None:
+        raise RuntimeError("storage directory required")
+    lock_path = storage_lock_path(path)
+    store_dir = storage_store_dir(path)
+    if lock_path.exists():
+        try:
+            lock_data = json.loads(lock_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            raise RuntimeError(f"storage locked by unreadable lock: {exc}") from exc
+        if (
+            str(lock_data.get("user_addr") or "") != str(user_addr or "")
+            or str(lock_data.get("node_mac") or "") != str(node_mac or "")
+        ):
+            raise RuntimeError("storage locked by another node")
+    store_dir.mkdir(parents=True, exist_ok=True)
+    lock_data = {
+        "user_addr": user_addr,
+        "node_mac": node_mac,
+        "storage_dir": str(path),
+        "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "schema_version": 1,
+    }
+    lock_path.write_text(json.dumps(lock_data, ensure_ascii=False, indent=2), encoding="utf-8")
+    hide_warning = hide_storage_store_dir(store_dir)
+    return {
+        "storage_dir": str(path),
+        "store_dir": str(store_dir),
+        "lock_path": str(lock_path),
+        "hide_warning": hide_warning,
+    }
 
 
 def get_directory_size_bytes(path):
@@ -582,18 +661,21 @@ def get_directory_size_bytes(path):
     return total
 
 
-def inspect_storage_dir(storage_dir):
+def inspect_storage_dir(storage_dir, user_addr="", node_mac="", storage_quota_gb=0):
     if not storage_dir:
         storage_used_gb = get_local_disk_use("")
         return {
             "storage_path": "",
-            "storage_status": "unavailable",
+            "storage_status": "required",
             "storage_error": "未指定存储目录",
             "storage_total_gb": 0,
             "storage_used_gb": storage_used_gb,
             "storage_free_gb": 0,
+            "storage_quota_gb": 0,
+            "storage_available_gb": 0,
         }
     try:
+        prepared = prepare_storage_root(storage_dir, user_addr, node_mac) if user_addr or node_mac else None
         path = ensure_storage_dir(storage_dir)
         if path is None or not path.is_dir():
             raise RuntimeError("存储路径不是目录")
@@ -612,32 +694,44 @@ def inspect_storage_dir(storage_dir):
             if probe_path is not None:
                 probe_path.unlink(missing_ok=True)
         usage = shutil.disk_usage(path)
-        dir_used = get_directory_size_bytes(path)
+        store_path = Path(prepared["store_dir"]) if prepared else path
+        dir_used = get_directory_size_bytes(store_path)
+        quota = float(storage_quota_gb or 0)
+        physical_free = round(usage.free / (1024 ** 3), 2)
+        used_gb = round(dir_used / (1024 ** 3), 2)
+        available_gb = max(0, min(quota - used_gb, physical_free)) if quota > 0 else 0
+        hide_warning = prepared.get("hide_warning", "") if prepared else ""
         return {
             "storage_path": str(path),
-            "storage_status": "ok",
-            "storage_error": "",
+            "storage_status": "ok" if quota > 0 else "quota_required",
+            "storage_error": hide_warning,
             "storage_total_gb": round(usage.total / (1024 ** 3), 2),
-            "storage_used_gb": round(dir_used / (1024 ** 3), 2),
-            "storage_free_gb": round(usage.free / (1024 ** 3), 2),
+            "storage_used_gb": used_gb,
+            "storage_free_gb": physical_free,
+            "storage_quota_gb": quota,
+            "storage_available_gb": round(available_gb, 2),
         }
     except Exception as exc:
         return {
             "storage_path": str(storage_dir),
-            "storage_status": "unavailable",
+            "storage_status": "locked" if "locked" in str(exc).lower() else "unavailable",
             "storage_error": str(exc),
             "storage_total_gb": 0,
             "storage_used_gb": 0,
             "storage_free_gb": 0,
+            "storage_quota_gb": float(storage_quota_gb or 0),
+            "storage_available_gb": 0,
         }
 
 
-def create_client_state(server_url, user_addr, node_mac, storage_dir, manage_port):
+def create_client_state(server_url, user_addr, node_mac, storage_dir, manage_port, storage_quota_gb=0, storage_explicit=True):
     return {
         "server_url": server_url,
         "user_addr": user_addr,
         "node_mac": node_mac,
         "storage_dir": storage_dir,
+        "storage_explicit": storage_explicit,
+        "storage_quota_gb": float(storage_quota_gb or 0),
         "manage_port": manage_port,
         "csrf_token": secrets.token_urlsafe(24),
         "running": True,
@@ -646,7 +740,7 @@ def create_client_state(server_url, user_addr, node_mac, storage_dir, manage_por
         "last_heartbeat": "",
         "last_error": "",
         "last_notice": "",
-        "storage": inspect_storage_dir(storage_dir),
+        "storage": inspect_storage_dir(storage_dir, user_addr, node_mac, storage_quota_gb),
     }
 
 
@@ -660,12 +754,19 @@ def client_status_payload(state):
         "last_error": state["last_error"],
         "last_notice": state.get("last_notice", ""),
         "storage_dir": state["storage_dir"],
+        "storage_explicit": state.get("storage_explicit", True),
+        "storage_quota_gb": state.get("storage_quota_gb", 0),
         "storage": state["storage"],
     }
 
 
 def build_heartbeat_payload(state, upload_bw):
-    storage_info = inspect_storage_dir(state["storage_dir"])
+    storage_info = inspect_storage_dir(
+        state["storage_dir"],
+        state.get("user_addr", ""),
+        state.get("node_mac", ""),
+        state.get("storage_quota_gb", 0),
+    )
     state["storage"] = storage_info
     return {
         "user_addr": state["user_addr"],
@@ -1024,14 +1125,27 @@ def client_run():
     PARENT_INVITE = get_invite_arg() or config["parent_invite"]
     HEARTBEAT_INTERVAL = int(config["heartbeat_interval"])
     reconnect_interval = int(config["reconnect_interval"])
-    NODE_STORAGE_DIR = get_storage_dir_arg() or config["storage_dir"]
+    storage_dir_arg = get_storage_dir_arg()
+    NODE_STORAGE_DIR = storage_dir_arg or config["storage_dir"]
+    storage_explicit = bool(storage_dir_arg or config.get("storage_explicit"))
+    storage_quota_gb = get_storage_quota_arg() or float(config.get("storage_quota_gb") or 0)
     MANAGE_PORT = get_manage_port_arg() or int(config["manage_port"])
     if NODE_STORAGE_DIR:
         safe_print(f"📁 节点存储目录：{Path(NODE_STORAGE_DIR).expanduser()}")
+    if storage_quota_gb:
+        safe_print(f"📦 节点可用存储额度：{storage_quota_gb} GB")
     device_mac = get_device_mac()
     # 根据设备MAC生成唯一用户标识
     user_addr = "NODE_" + hashlib.md5(device_mac.encode()).hexdigest()[:12]
-    state = create_client_state(SERVER_URL, user_addr, device_mac, NODE_STORAGE_DIR, MANAGE_PORT)
+    state = create_client_state(
+        SERVER_URL,
+        user_addr,
+        device_mac,
+        NODE_STORAGE_DIR,
+        MANAGE_PORT,
+        storage_quota_gb,
+        storage_explicit,
+    )
     manage_server = None
     try:
         manage_server = start_manage_server(state)
