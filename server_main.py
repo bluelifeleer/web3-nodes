@@ -800,6 +800,34 @@ def post_client_shard(node, shard, request_id=""):
         return False
 
 
+def insert_file_shard_records(file_hash, encrypted_data, stored_nodes):
+    if not stored_nodes:
+        return []
+    manifest = build_encrypted_shard_manifest(file_hash, encrypted_data)
+    inserted = []
+    for shard in manifest["shards"]:
+        node_address = stored_nodes[shard["chunk_index"] % len(stored_nodes)]
+        current_cursor().execute(
+            """
+            insert into file_shard_record(file_hash,encrypted_hash,chunk_index,chunk_total,chunk_hash,chunk_size,node_address,storage_status,stored_at)
+            values(%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            """,
+            (
+                file_hash,
+                manifest["encrypted_hash"],
+                shard["chunk_index"],
+                shard["chunk_total"],
+                shard["chunk_hash"],
+                shard["chunk_size"],
+                node_address,
+                "stored",
+                datetime.now(),
+            ),
+        )
+        inserted.append(dict(shard, node_address=node_address))
+    return inserted
+
+
 def persist_file_to_storage_nodes(file_hash, encrypted_data, nodes, request_id=""):
     write_server_fallback_copy(file_hash, encrypted_data)
     real_nodes = real_user_storage_nodes(nodes)
@@ -815,6 +843,15 @@ def persist_file_to_storage_nodes(file_hash, encrypted_data, nodes, request_id="
     if not stored_nodes:
         raise RuntimeError("暂无可用真实客户端节点")
     return stored_nodes
+
+
+def call_persist_file_to_storage_nodes(file_hash, encrypted_data, nodes, request_id=""):
+    try:
+        return persist_file_to_storage_nodes(file_hash, encrypted_data, nodes, request_id=request_id)
+    except TypeError as exc:
+        if "request_id" not in str(exc):
+            raise
+        return persist_file_to_storage_nodes(file_hash, encrypted_data, nodes)
 
 
 def read_file_from_storage_nodes(file_hash, nodes):
@@ -3774,6 +3811,7 @@ def user_file_upload():
     username = user_row[1] if len(user_row) > 1 and user_row[1] else ""
     upload_user = owner_wallet_address or username
     real_file_hash = get_file_hash(file_data)
+    request_id = secrets.token_hex(8)
     current_cursor().execute(f"""
     select {USER_FILE_SELECT_PROJECTION}
     from file_chain_record
@@ -3802,11 +3840,28 @@ def user_file_upload():
         assign_nodes = real_user_storage_nodes(get_backup_nodes())
         if not assign_nodes:
             return jsonify({"code":503,"msg":"暂无可用用户节点，请先启动节点客户端后再上传"}), 503
-        assign_nodes = persist_file_to_storage_nodes(real_file_hash, encrypt_data, assign_nodes)
+        assign_nodes = call_persist_file_to_storage_nodes(real_file_hash, encrypt_data, assign_nodes, request_id=request_id)
     except Exception as exc:
         return jsonify({"code":503,"msg":str(exc) or "用户节点存储失败"}), 503
 
     cid, ipfs_backup_status, ipfs_backup_error = backup_to_ipfs(encrypt_data)
+    if ipfs_backup_status == "ok":
+        insert_storage_audit_log(
+            "fallback.ipfs.write.success",
+            file_hash=real_file_hash,
+            request_id=request_id,
+            status="ok",
+            message="IPFS backup stored",
+            metadata={"ipfs_cid": cid},
+        )
+    else:
+        insert_storage_audit_log(
+            "fallback.ipfs.write.failed",
+            file_hash=real_file_hash,
+            request_id=request_id,
+            status="failed",
+            message=ipfs_backup_error or "IPFS backup failed",
+        )
     with DatabaseTransaction():
         try:
             current_cursor().execute('''
@@ -3825,6 +3880,15 @@ def user_file_upload():
                 owner_user_id,
                 owner_wallet_address,
             ))
+            shard_records = insert_file_shard_records(real_file_hash, encrypt_data, assign_nodes)
+            insert_storage_audit_log(
+                "upload.sharded",
+                file_hash=real_file_hash,
+                request_id=request_id,
+                status="ok",
+                message="encrypted shards recorded",
+                metadata={"shard_count": len(shard_records), "nodes": assign_nodes},
+            )
 
             for node in assign_nodes:
                 current_cursor().execute('update node_power set disk_used=disk_used+0.1 where user_address=%s',(node,))

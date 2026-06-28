@@ -4052,6 +4052,147 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertEqual(insert_params[2], "")
         self.assertEqual(json.loads(insert_params[6]), ["NODE_A", "NODE_B"])
 
+    def test_user_file_upload_records_shard_metadata_and_audit(self):
+        auth = importlib.import_module("auth")
+        server_main = load_server_main(SESSION_SECRET="session-secret")
+        token = auth.create_session_token({"user_id": 7, "username": "alice"}, "session-secret")
+        new_hash = "d" * 64
+
+        class FakeCursor:
+            def __init__(self):
+                self.last_sql = ""
+                self.executed = []
+
+            def execute(self, sql, params=None):
+                self.last_sql = sql
+                self.executed.append((sql, params))
+
+            def fetchone(self):
+                if "from app_user" in self.last_sql:
+                    return (7, "alice", "hash", "0xabc", "active")
+                if "from file_chain_record" in self.last_sql:
+                    return None
+                return None
+
+        class FakeConnection:
+            def __init__(self):
+                self.autocommit_state = True
+
+            def get_autocommit(self):
+                return self.autocommit_state
+
+            def autocommit(self, value):
+                self.autocommit_state = value
+
+            def commit(self):
+                pass
+
+            def rollback(self):
+                pass
+
+        class FakeIPFSClient:
+            def add_bytes(self, data):
+                return "cid"
+
+            def close(self):
+                pass
+
+        old_shard_size = server_main.SHARD_SIZE
+        try:
+            server_main.SHARD_SIZE = 4
+            server_main.cursor = FakeCursor()
+            server_main.db = FakeConnection()
+            server_main.init_db = lambda: True
+            server_main.aes_encrypt = lambda data: b"abcdefgh"
+            server_main.get_file_hash = lambda data: new_hash
+            server_main.get_backup_nodes = lambda: ["NODE_A"]
+            server_main.persist_file_to_storage_nodes = lambda file_hash, encrypted, nodes, request_id="": ["NODE_A"]
+            server_main.get_ipfs_client = lambda: FakeIPFSClient()
+
+            response = server_main.app.test_client().post(
+                "/api/user/files",
+                headers={"Authorization": f"Bearer {token}"},
+                data={"file": (io.BytesIO(b"plain"), "demo.txt")},
+                content_type="multipart/form-data",
+            )
+        finally:
+            server_main.SHARD_SIZE = old_shard_size
+
+        self.assertEqual(response.status_code, 200)
+        shard_inserts = [
+            params for sql, params in server_main.cursor.executed
+            if sql.strip().lower().startswith("insert into file_shard_record")
+        ]
+        audit_inserts = [
+            params for sql, params in server_main.cursor.executed
+            if sql.strip().lower().startswith("insert into storage_audit_log")
+        ]
+        self.assertEqual(len(shard_inserts), 2)
+        self.assertTrue(any(params[0] == "upload.sharded" for params in audit_inserts))
+        self.assertTrue(any(params[0] == "fallback.ipfs.write.success" for params in audit_inserts))
+
+    def test_user_file_upload_still_attempts_ipfs_after_real_node_success(self):
+        auth = importlib.import_module("auth")
+        server_main = load_server_main(SESSION_SECRET="session-secret")
+        token = auth.create_session_token({"user_id": 7, "username": "alice"}, "session-secret")
+        new_hash = "e" * 64
+        events = []
+
+        class FakeCursor:
+            def __init__(self):
+                self.last_sql = ""
+
+            def execute(self, sql, params=None):
+                self.last_sql = sql
+
+            def fetchone(self):
+                if "from app_user" in self.last_sql:
+                    return (7, "alice", "hash", "0xabc", "active")
+                if "from file_chain_record" in self.last_sql:
+                    return None
+                return None
+
+        class FakeConnection:
+            def get_autocommit(self):
+                return True
+
+            def autocommit(self, value):
+                pass
+
+            def commit(self):
+                pass
+
+            def rollback(self):
+                pass
+
+        class FakeIPFSClient:
+            def add_bytes(self, data):
+                events.append("ipfs")
+                return "cid"
+
+            def close(self):
+                pass
+
+        server_main.cursor = FakeCursor()
+        server_main.db = FakeConnection()
+        server_main.init_db = lambda: True
+        server_main.aes_encrypt = lambda data: b"encrypted"
+        server_main.file_shard = lambda data: [data]
+        server_main.get_file_hash = lambda data: new_hash
+        server_main.get_backup_nodes = lambda: ["NODE_A"]
+        server_main.persist_file_to_storage_nodes = lambda file_hash, encrypted, nodes, request_id="": events.append("client") or ["NODE_A"]
+        server_main.get_ipfs_client = lambda: FakeIPFSClient()
+
+        response = server_main.app.test_client().post(
+            "/api/user/files",
+            headers={"Authorization": f"Bearer {token}"},
+            data={"file": (io.BytesIO(b"plain"), "demo.txt")},
+            content_type="multipart/form-data",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(events[:2], ["client", "ipfs"])
+
     def test_user_file_upload_requires_real_user_storage_nodes(self):
         auth = importlib.import_module("auth")
         server_main = load_server_main(SESSION_SECRET="session-secret")
