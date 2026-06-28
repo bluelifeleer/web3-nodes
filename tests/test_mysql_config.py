@@ -2947,7 +2947,7 @@ class MysqlConfigTest(unittest.TestCase):
 
                 result = client_module.inspect_storage_dir(str(storage_dir))
 
-                self.assertEqual(result["storage_status"], "ok")
+                self.assertEqual(result["storage_status"], "quota_required")
                 self.assertTrue(existing_probe.exists())
                 self.assertEqual(existing_probe.read_text(encoding="utf-8"), "user data")
         finally:
@@ -4921,6 +4921,7 @@ class MysqlConfigTest(unittest.TestCase):
         server_main.init_db = lambda: True
         server_main.get_ipfs_client = lambda: FakeIPFSClient()
         server_main.aes_decrypt = lambda data: b"plain-data"
+        server_main.get_file_hash = lambda data: "f" * 64
 
         response = server_main.app.test_client().get(
             "/api/share/share123/download?extract_code=ABCD",

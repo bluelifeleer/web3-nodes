@@ -365,33 +365,27 @@ copy node_config.example.json node_config.json
   "parent_invite": "",
   "heartbeat_interval": 60,
   "reconnect_interval": 10,
-  "storage_dir": "./node_storage/client"
+  "manage_port": 8787,
+  "storage_dir": "",
+  "storage_quota_gb": 0
 }
 ```
 
-启动客户端：
+客户端不再默认使用内置目录作为有效存储。首次启动必须显式指定存储目录和愿意贡献的可用容量，否则节点只会启动本地管理页并提示配置目录，不会作为健康存储节点参与分片写入。
+
+推荐启动方式：
 
 ```powershell
-python client.py
+python client.py --storage-dir=D:\web3-node-data --storage-quota-gb=100 --manage-port=8787
 ```
 
-如需让客户节点使用指定存储目录，可以三选一：
-
-```powershell
-python client.py --storage-dir=D:\web3-node-data
-```
-
-如需同时固定本地管理端口，推荐直接这样启动：
-
-```powershell
-python client.py --storage-dir=D:\web3-node-data --manage-port=8787
-```
-
-或写入 `node_config.json`：
+也可以写入 `node_config.json`：
 
 ```json
 {
-  "storage_dir": "D:/web3-node-data"
+  "storage_dir": "D:/web3-node-data",
+  "storage_quota_gb": 100,
+  "manage_port": 8787
 }
 ```
 
@@ -399,10 +393,26 @@ python client.py --storage-dir=D:\web3-node-data --manage-port=8787
 
 ```powershell
 $env:NODE_STORAGE_DIR="D:\web3-node-data"
+$env:NODE_STORAGE_QUOTA_GB="100"
 python client.py
 ```
 
-配置后客户端会自动创建目录，并按该目录实际占用上报存储数据；未配置时仍兼容原来的本地 IPFS repo 占用统计。
+配置后客户端会自动创建目录锁和隐藏存储根：
+
+```text
+D:\web3-node-data
+  .web3_nodes.lock
+  .web3_nodes_store\
+    files\
+    manifest\
+```
+
+说明：
+
+- `.web3_nodes.lock` 会绑定 `user_addr` 和 `node_mac`，避免多个节点误用同一目录。
+- `.web3_nodes_store` 保存加密分片和 manifest，不保存明文文件。
+- Windows 下会尝试对 `.web3_nodes_store` 执行隐藏/系统属性；失败不会删除数据，但会在目录健康状态里提示。
+- 心跳会上报物理总容量、目录已用容量、物理可用容量、用户声明的 `storage_quota_gb` 和计算后的 `storage_available_gb`。
 
 客户端启动后会同时拉起本地管理页：
 
@@ -414,10 +424,38 @@ http://127.0.0.1:8787
 
 本地管理页当前提供：
 
-- 目录健康检查：显示目录是否可写、最近一次检测错误和当前路径。
-- 容量上报概览：总容量、已使用、可用容量，以及下一次心跳会带上的目录统计。
+- 目录健康检查：显示目录是否可写、是否锁定、最近一次检测错误和当前路径。
+- 容量上报概览：总容量、已使用、物理可用容量、声明可用容量、剩余可写额度。
 - 收益与提现：通过本地 `/api/earnings`、`/api/withdrawals` 代理读取服务端节点收益和提现记录，并可从本地页提交提现申请。
+- 分片存储 API：服务端可写入/读取加密分片，客户端按 `file_hash/chunk_index` 保存并维护 manifest。
 - 控制操作：支持安全停止节点；`重启节点` 第一版只返回提示，开发模式暂不执行自动进程替换。
+
+## 9. 分片存储、下载校验与兜底
+
+用户文件上传后，服务端会：
+
+1. 计算原文件 `file_hash = sha256(plain)`。
+2. AES 加密完整文件。
+3. 对密文切片并为每个分片生成 `chunk_hash`。
+4. 将加密分片下发到真实客户端节点目录。
+5. 写入 `file_shard_record` 分片元数据。
+6. 同时保存一份服务端模拟节点兜底副本，并尝试上传 IPFS 备份。
+
+下载时会优先从真实客户端节点读取分片，逐片验证 `chunk_hash`，按 `chunk_index` 合并密文，解密后再次验证 `sha256(plain) == file_hash`。只有完整校验通过后才返回文件并记录下载收益；客户端分片不可用时会依次尝试服务端兜底副本和 IPFS 备份。
+
+## 10. 存储审计日志与导出
+
+后台 `/admin` 页面包含“存储审计日志”区域，可按 `file_hash`、节点地址、事件类型、状态筛选并刷新，点击“详情”查看 `metadata_json`。
+
+后台 API：
+
+```text
+GET /api/admin/audit/storage
+GET /api/admin/audit/storage/export?format=json
+GET /api/admin/audit/storage/export?format=csv
+```
+
+所有后台审计接口都需要 `X-Admin-Token` 或 `admin_token`。审计日志覆盖上传接收、加密切片、客户端分片写入/读取、hash 校验失败、解密失败、server/IPFS 兜底使用和最终下载成功等事件。
 
 说明：
 
@@ -440,7 +478,7 @@ Web3分布式存储激励节点启动成功
 
 如果服务端暂时未启动或网络中断，客户端不会退出；它会按 `reconnect_interval` 自动重试注册。注册成功后才进入心跳循环，心跳失败也会继续等待下一轮上报。
 
-## 9. 邀请码 / 上级绑定
+## 11. 邀请码 / 上级绑定
 
 客户端支持通过启动参数指定上级邀请码：
 
@@ -473,7 +511,7 @@ $env:NODE_STORAGE_DIR="D:\web3-node-data"
 python client.py
 ```
 
-## 10. IPFS 安装
+## 12. IPFS 安装
 
 项目调用本地 IPFS 命令和 API：
 
@@ -541,7 +579,7 @@ docker run -d --name ipfs_host \
 
 建议只把 `5001` API 端口绑定到 `127.0.0.1`，不要直接暴露公网。
 
-## 11. 常见问题
+## 13. 常见问题
 
 ### 网页打不开
 
@@ -611,7 +649,7 @@ ipfs daemon
 pip install -r requirements.txt
 ```
 
-## 12. 成功标准
+## 14. 成功标准
 
 全部满足即表示系统跑通：
 
