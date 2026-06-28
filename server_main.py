@@ -205,7 +205,10 @@ def insert_storage_audit_log(
     metadata=None,
 ):
     metadata_json = json.dumps(metadata or {}, ensure_ascii=False, sort_keys=True)
-    current_cursor().execute(
+    audit_cursor = current_cursor()
+    if audit_cursor is None:
+        return
+    audit_cursor.execute(
         """
         insert into storage_audit_log(event_type,file_hash,chunk_index,node_address,request_id,status,message,metadata_json)
         values(%s,%s,%s,%s,%s,%s,%s,%s)
@@ -860,6 +863,177 @@ def read_file_from_storage_nodes(file_hash, nodes):
         if target is not None and target.exists():
             return target.read_bytes()
     return None
+
+
+def read_client_shard(node, file_hash, chunk_index, request_id=""):
+    base_url = get_node_storage_api_url(node)
+    if not base_url:
+        return None
+    try:
+        response = requests.get(
+            f"{base_url}/api/node/storage/shards/{urllib.parse.quote(file_hash)}/{int(chunk_index)}",
+            timeout=15,
+        )
+        if int(getattr(response, "status_code", 500) or 500) >= 400:
+            return None
+        payload = response.json()
+        data = payload.get("data") if isinstance(payload, dict) else None
+        if not isinstance(data, dict) or not data.get("chunk_b64"):
+            return None
+        return base64.b64decode(data["chunk_b64"])
+    except Exception:
+        return None
+
+
+def select_file_shard_records(file_hash):
+    try:
+        current_cursor().execute(
+            """
+            select file_hash,encrypted_hash,chunk_index,chunk_total,chunk_hash,chunk_size,node_address
+            from file_shard_record
+            where file_hash=%s and storage_status='stored'
+            order by chunk_index asc
+            """,
+            (file_hash,),
+        )
+        return list(current_cursor().fetchall())
+    except Exception:
+        return []
+
+
+def read_encrypted_from_client_shards(file_hash, request_id=""):
+    rows = select_file_shard_records(file_hash)
+    if not rows:
+        return None
+    chunks = {}
+    chunk_total = int(rows[0][3] or 0)
+    encrypted_hash = rows[0][1] or ""
+    for row in rows:
+        index = int(row[2])
+        expected_hash = row[4]
+        node_address = row[6]
+        chunk = read_client_shard(node_address, file_hash, index, request_id=request_id)
+        if chunk is None:
+            insert_storage_audit_log(
+                "download.shard.read.failed",
+                file_hash=file_hash,
+                chunk_index=index,
+                node_address=node_address,
+                request_id=request_id,
+                status="failed",
+                message="client shard unavailable",
+            )
+            return None
+        actual_hash = hashlib.sha256(chunk).hexdigest()
+        if actual_hash != expected_hash:
+            insert_storage_audit_log(
+                "download.shard.hash_failed",
+                file_hash=file_hash,
+                chunk_index=index,
+                node_address=node_address,
+                request_id=request_id,
+                status="failed",
+                message="client shard hash mismatch",
+                metadata={"expected": expected_hash, "actual": actual_hash},
+            )
+            return None
+        chunks[index] = chunk
+    if chunk_total <= 0 or set(chunks) != set(range(chunk_total)):
+        insert_storage_audit_log(
+            "download.shard.read.failed",
+            file_hash=file_hash,
+            request_id=request_id,
+            status="failed",
+            message="client shard set incomplete",
+            metadata={"expected_total": chunk_total, "actual_indexes": sorted(chunks)},
+        )
+        return None
+    encrypted = b"".join(chunks[index] for index in range(chunk_total))
+    if encrypted_hash and hashlib.sha256(encrypted).hexdigest() != encrypted_hash:
+        insert_storage_audit_log(
+            "download.shard.hash_failed",
+            file_hash=file_hash,
+            request_id=request_id,
+            status="failed",
+            message="encrypted file hash mismatch",
+        )
+        return None
+    insert_storage_audit_log(
+        "download.merge.success",
+        file_hash=file_hash,
+        request_id=request_id,
+        status="ok",
+        message="client shards merged",
+        metadata={"chunk_total": chunk_total},
+    )
+    return encrypted
+
+
+def read_server_fallback_copy(file_hash):
+    return read_file_from_storage_nodes(file_hash, ["SERVER_BACKUP_NODE"])
+
+
+def read_ipfs_backup(ipfs_cid):
+    if not ipfs_cid:
+        return None
+    client = get_ipfs_client()
+    try:
+        return client.cat(ipfs_cid)
+    finally:
+        if hasattr(client, "close"):
+            client.close()
+
+
+def read_verified_encrypted_file(file_hash, stored_nodes=None, ipfs_cid="", request_id=""):
+    encrypted = read_encrypted_from_client_shards(file_hash, request_id=request_id)
+    if encrypted is not None:
+        return encrypted
+    encrypted = read_server_fallback_copy(file_hash)
+    if encrypted is not None:
+        insert_storage_audit_log(
+            "download.fallback.used",
+            file_hash=file_hash,
+            request_id=request_id,
+            status="ok",
+            message="server fallback used",
+        )
+        return encrypted
+    try:
+        encrypted = read_ipfs_backup(ipfs_cid)
+    except Exception:
+        encrypted = None
+    if encrypted is not None:
+        insert_storage_audit_log(
+            "download.fallback.used",
+            file_hash=file_hash,
+            request_id=request_id,
+            status="ok",
+            message="ipfs fallback used",
+            metadata={"ipfs_cid": ipfs_cid},
+        )
+    return encrypted
+
+
+def decrypt_and_verify_file(file_hash, encrypted):
+    try:
+        plain = aes_decrypt(encrypted)
+    except RuntimeError:
+        insert_storage_audit_log(
+            "download.decrypt.failed",
+            file_hash=file_hash,
+            status="failed",
+            message="decrypt failed",
+        )
+        raise
+    if get_file_hash(plain) != file_hash:
+        insert_storage_audit_log(
+            "download.file_hash_failed",
+            file_hash=file_hash,
+            status="failed",
+            message="file hash mismatch",
+        )
+        raise RuntimeError("file hash mismatch")
+    return plain
 
 
 def backup_to_ipfs(encrypted_data):
@@ -4167,21 +4341,17 @@ def public_share_download(share_code):
         return jsonify({"code":403,"msg":"提取码错误"}), 403
 
     downloader_user_id = optional_downloader_user_id()
-    encrypted = read_file_from_storage_nodes(share["file_hash"], share["stored_nodes"])
+    request_id = secrets.token_hex(8)
+    encrypted = read_verified_encrypted_file(
+        share["file_hash"],
+        share["stored_nodes"],
+        share["ipfs_cid"],
+        request_id=request_id,
+    )
     if encrypted is None:
-        if not share["ipfs_cid"]:
-            return jsonify({"code":502,"msg":"用户节点副本不可用，且暂无 IPFS 备份"}), 502
-        client = get_ipfs_client()
-        try:
-            try:
-                encrypted = client.cat(share["ipfs_cid"])
-            except Exception:
-                return jsonify({"code":502,"msg":"用户节点副本不可用，IPFS文件读取失败"}), 502
-        finally:
-            if hasattr(client, "close"):
-                client.close()
+        return jsonify({"code":502,"msg":"用户节点副本不可用，且暂无可用兜底备份"}), 502
     try:
-        plain = aes_decrypt(encrypted)
+        plain = decrypt_and_verify_file(share["file_hash"], encrypted)
     except RuntimeError as exc:
         return jsonify({"code":500,"msg":str(exc)}), 500
 
@@ -4268,18 +4438,17 @@ def file_download(file_hash):
         if record.get("owner_user_id") is not None:
             return jsonify({"code":403,"msg":"用户文件请通过分享链接下载"}), 403
         return jsonify({"code":403,"msg":"文件访问令牌无效"}), 403
-    encrypted = read_file_from_storage_nodes(file_hash, record.get("nodes") or [])
+    request_id = secrets.token_hex(8)
+    encrypted = read_verified_encrypted_file(
+        file_hash,
+        record.get("nodes") or [],
+        record["ipfs_cid"],
+        request_id=request_id,
+    )
     if encrypted is None:
-        if not record["ipfs_cid"]:
-            return jsonify({"code":502,"msg":"用户节点副本不可用，且暂无 IPFS 备份"}), 502
-        client = get_ipfs_client()
-        try:
-            encrypted = client.cat(record["ipfs_cid"])
-        finally:
-            if hasattr(client, "close"):
-                client.close()
+        return jsonify({"code":502,"msg":"用户节点副本不可用，且暂无可用兜底备份"}), 502
     try:
-        plain = aes_decrypt(encrypted)
+        plain = decrypt_and_verify_file(file_hash, encrypted)
     except RuntimeError as exc:
         return jsonify({"code":500,"msg":str(exc)}), 500
     filename = record["file_name"] or f"{file_hash}.bin"

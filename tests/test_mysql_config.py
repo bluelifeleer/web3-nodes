@@ -4918,11 +4918,81 @@ class MysqlConfigTest(unittest.TestCase):
         server_main.read_file_from_storage_nodes = lambda file_hash, nodes: b"encrypted-from-node"
         server_main.get_ipfs_client = lambda: self.fail("IPFS should not be used when user node storage is available")
         server_main.aes_decrypt = lambda data: b"plain-from-node"
+        server_main.get_file_hash = lambda data: "f" * 64
 
         response = server_main.app.test_client().get("/api/share/share123/download?extract_code=ABCD")
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data, b"plain-from-node")
+
+    def test_download_reconstructs_verified_client_shards_before_decrypt(self):
+        server_main = load_server_main()
+        file_hash = "a" * 64
+        first = b"enc-"
+        second = b"data"
+        encrypted = first + second
+        encrypted_hash = server_main.hashlib.sha256(encrypted).hexdigest()
+
+        class FakeCursor:
+            def __init__(self):
+                self.last_sql = ""
+
+            def execute(self, sql, params=None):
+                self.last_sql = sql
+
+            def fetchall(self):
+                if "from file_shard_record" in self.last_sql:
+                    return [
+                        (file_hash, encrypted_hash, 0, 2, server_main.hashlib.sha256(first).hexdigest(), len(first), "NODE_A"),
+                        (file_hash, encrypted_hash, 1, 2, server_main.hashlib.sha256(second).hexdigest(), len(second), "NODE_B"),
+                    ]
+                return []
+
+        server_main.cursor = FakeCursor()
+        server_main.read_client_shard = lambda node, file_hash_arg, index, request_id="": first if index == 0 else second
+
+        result = server_main.read_encrypted_from_client_shards(file_hash, request_id="REQ1")
+
+        self.assertEqual(result, encrypted)
+
+    def test_download_rejects_corrupt_client_shard_and_uses_fallback(self):
+        server_main = load_server_main()
+        file_hash = "b" * 64
+        audit_events = []
+
+        class FakeCursor:
+            def __init__(self):
+                self.last_sql = ""
+
+            def execute(self, sql, params=None):
+                self.last_sql = sql
+                if sql.strip().lower().startswith("insert into storage_audit_log"):
+                    audit_events.append(params[0])
+
+            def fetchall(self):
+                if "from file_shard_record" in self.last_sql:
+                    return [
+                        (file_hash, "unused", 0, 1, server_main.hashlib.sha256(b"good").hexdigest(), 3, "NODE_A"),
+                    ]
+                return []
+
+        server_main.cursor = FakeCursor()
+        server_main.read_client_shard = lambda node, file_hash_arg, index, request_id="": b"bad"
+        server_main.read_server_fallback_copy = lambda file_hash_arg: b"fallback-encrypted"
+        server_main.get_ipfs_client = lambda: self.fail("IPFS should not be used when server fallback succeeds")
+
+        result = server_main.read_verified_encrypted_file(file_hash, ["NODE_A"], "cid", request_id="REQ1")
+
+        self.assertEqual(result, b"fallback-encrypted")
+        self.assertIn("download.shard.hash_failed", audit_events)
+        self.assertIn("download.fallback.used", audit_events)
+
+    def test_download_final_file_hash_mismatch_returns_json_error(self):
+        server_main = load_server_main()
+        server_main.aes_decrypt = lambda encrypted: b"wrong-plain"
+
+        with self.assertRaisesRegex(RuntimeError, "file hash"):
+            server_main.decrypt_and_verify_file("c" * 64, b"encrypted")
 
     def test_share_download_falls_back_to_ipfs_when_user_node_storage_missing(self):
         server_main = load_server_main()
@@ -4986,6 +5056,7 @@ class MysqlConfigTest(unittest.TestCase):
         server_main.read_file_from_storage_nodes = lambda file_hash, nodes: None
         server_main.get_ipfs_client = lambda: FakeIPFSClient()
         server_main.aes_decrypt = lambda data: b"plain-from-ipfs"
+        server_main.get_file_hash = lambda data: "f" * 64
 
         response = server_main.app.test_client().get("/api/share/share123/download")
 
@@ -5061,6 +5132,7 @@ class MysqlConfigTest(unittest.TestCase):
         server_main.init_db = lambda: True
         server_main.get_ipfs_client = lambda: FakeIPFSClient()
         server_main.aes_decrypt = lambda data: b"plain-data"
+        server_main.get_file_hash = lambda data: "f" * 64
 
         response = server_main.app.test_client().get("/api/share/share123/download")
 
@@ -5269,6 +5341,7 @@ class MysqlConfigTest(unittest.TestCase):
         server_main.init_db = lambda: True
         server_main.get_ipfs_client = lambda: FakeIPFSClient()
         server_main.aes_decrypt = lambda data: b"plain-data"
+        server_main.get_file_hash = lambda data: "hash1"
 
         response = server_main.app.test_client().get("/api/file_download/hash1")
 
