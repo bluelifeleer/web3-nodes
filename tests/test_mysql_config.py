@@ -1571,6 +1571,105 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertIn("withdrawalNoteDrafts", server_main.ADMIN_HTML)
         self.assertIn("document.activeElement", server_main.ADMIN_HTML)
 
+    def test_admin_storage_audit_api_filters_and_formats_rows(self):
+        server_main = load_server_main(ADMIN_API_TOKEN="secret-token")
+        executed = []
+
+        class FakeCursor:
+            def __init__(self):
+                self.last_sql = ""
+
+            def execute(self, sql, params=None):
+                self.last_sql = sql
+                executed.append((sql, params))
+
+            def fetchall(self):
+                return [
+                    (
+                        9,
+                        "shard.write.success",
+                        "a" * 64,
+                        1,
+                        "NODE_A",
+                        "REQ1",
+                        "ok",
+                        "stored",
+                        '{"chunk_hash":"b"}',
+                        server_main.datetime(2026, 6, 28, 10, 0, 0),
+                    )
+                ]
+
+        server_main.cursor = FakeCursor()
+        server_main.init_db = lambda: True
+        response = server_main.app.test_client().get(
+            "/api/admin/audit/storage?file_hash={}&node_address=NODE_A&event_type=shard.write.success&status=ok".format("a" * 64),
+            headers={"X-Admin-Token": "secret-token"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()["data"][0]
+        self.assertEqual(payload["event_type"], "shard.write.success")
+        self.assertEqual(payload["metadata"]["chunk_hash"], "b")
+        self.assertIn("file_hash=%s", executed[0][0])
+        self.assertIn("node_address=%s", executed[0][0])
+        self.assertIn("event_type=%s", executed[0][0])
+        self.assertIn("status=%s", executed[0][0])
+
+    def test_admin_storage_audit_export_supports_json_and_csv(self):
+        server_main = load_server_main(ADMIN_API_TOKEN="secret-token")
+
+        class FakeCursor:
+            def execute(self, sql, params=None):
+                pass
+
+            def fetchall(self):
+                return [
+                    (
+                        1,
+                        "download.success",
+                        "f" * 64,
+                        None,
+                        "NODE_A",
+                        "REQ1",
+                        "ok",
+                        "done",
+                        "{}",
+                        server_main.datetime(2026, 6, 28, 10, 0, 0),
+                    )
+                ]
+
+        server_main.cursor = FakeCursor()
+        server_main.init_db = lambda: True
+        client = server_main.app.test_client()
+        json_response = client.get(
+            "/api/admin/audit/storage/export?format=json",
+            headers={"X-Admin-Token": "secret-token"},
+        )
+        csv_response = client.get(
+            "/api/admin/audit/storage/export?format=csv",
+            headers={"X-Admin-Token": "secret-token"},
+        )
+
+        self.assertEqual(json_response.status_code, 200)
+        self.assertEqual(csv_response.status_code, 200)
+        self.assertIn("application/json", json_response.content_type)
+        self.assertIn("text/csv", csv_response.content_type)
+        self.assertIn("download.success", csv_response.data.decode("utf-8"))
+
+    def test_admin_page_renders_storage_audit_section(self):
+        server_main = load_server_main(ADMIN_API_TOKEN="secret-token")
+
+        for marker in (
+            "存储审计日志",
+            "storageAuditTable",
+            "getStorageAuditLogs",
+            "showStorageAuditDetail",
+            "exportStorageAudit",
+            "auditFileHashFilter",
+            "auditNodeFilter",
+        ):
+            self.assertIn(marker, server_main.ADMIN_HTML)
+
     def test_auto_settle_reward_uses_daily_snapshot_key(self):
         server_main = load_server_main()
         executed = []

@@ -2,6 +2,8 @@
 import time
 import hashlib
 import random
+import csv
+import io
 from datetime import datetime, timedelta
 from functools import wraps
 import requests
@@ -2239,6 +2241,22 @@ ADMIN_HTML = '''
     </div>
 
     <div class="box commercial-card">
+        <h3>存储审计日志</h3>
+        <input id="auditFileHashFilter" placeholder="file_hash" style="min-width:220px">
+        <input id="auditNodeFilter" placeholder="node_address">
+        <input id="auditEventFilter" placeholder="event_type">
+        <input id="auditStatusFilter" placeholder="status">
+        <button onclick="getStorageAuditLogs()">刷新日志</button>
+        <button onclick="exportStorageAudit('json')">导出JSON</button>
+        <button onclick="exportStorageAudit('csv')">导出CSV</button>
+        <table>
+            <thead><tr><th>时间</th><th>事件</th><th>文件</th><th>分片</th><th>节点</th><th>状态</th><th>详情</th></tr></thead>
+            <tbody id="storageAuditTable"></tbody>
+        </table>
+        <pre id="storageAuditDetail" style="white-space:pre-wrap;background:#f8fafc;padding:12px;border-radius:6px;margin-top:10px;"></pre>
+    </div>
+
+    <div class="box commercial-card">
     <h3>📁 文件加密上链存证记录（分布式存储）</h3>
     <input id="fileSearch" placeholder="搜索文件名 / 哈希 / CID" style="min-width:260px">
     <button onclick="getFileList()">刷新存证数据</button>
@@ -2523,6 +2541,51 @@ function reviewWithdrawal(id,status){
     });
 }
 
+function storageAuditQuery(){
+    const params = new URLSearchParams();
+    const fields = [
+        ["file_hash", "auditFileHashFilter"],
+        ["node_address", "auditNodeFilter"],
+        ["event_type", "auditEventFilter"],
+        ["status", "auditStatusFilter"]
+    ];
+    fields.forEach(([key, id]) => {
+        const value = (document.getElementById(id)?.value || "").trim();
+        if(value){ params.set(key, value); }
+    });
+    return params;
+}
+
+function showStorageAuditDetail(index){
+    const item = window.storageAuditRows && window.storageAuditRows[index];
+    document.getElementById("storageAuditDetail").innerText = item ? JSON.stringify(item, null, 2) : "";
+}
+
+function getStorageAuditLogs(){
+    const params = storageAuditQuery();
+    adminFetch(`/api/admin/audit/storage?${params.toString()}`)
+    .then(res=>res.json())
+    .then(data=>{
+        window.storageAuditRows = data.data || [];
+        const html = window.storageAuditRows.map((item, index) => `<tr>
+            <td>${escHtml(item.created_at || "")}</td>
+            <td>${escHtml(item.event_type || "")}</td>
+            <td style="font-size:12px">${escHtml((item.file_hash || "").substring(0, 18))}</td>
+            <td>${item.chunk_index ?? ""}</td>
+            <td>${escHtml(item.node_address || "")}</td>
+            <td>${escHtml(item.status || "")}</td>
+            <td><button onclick="showStorageAuditDetail(${index})">详情</button></td>
+        </tr>`).join("");
+        document.getElementById("storageAuditTable").innerHTML = html || '<tr><td colspan="7">暂无审计日志</td></tr>';
+    });
+}
+
+function exportStorageAudit(format){
+    const params = storageAuditQuery();
+    params.set("format", format);
+    window.open(`/api/admin/audit/storage/export?${params.toString()}&admin_token=${encodeURIComponent(getAdminToken())}`, "_blank");
+}
+
 function getFileList(){
     const q = encodeURIComponent(document.getElementById("fileSearch").value || "");
     adminFetch(`/api/file_list?q=${q}&page=1&page_size=50`)
@@ -2703,6 +2766,7 @@ function refreshAdminData(){
     getDailyReward();
     getInviteTree();
     getAdminWithdrawals();
+    getStorageAuditLogs();
     if(map){ loadNodeMap(); }
     setAdminAutoRefreshStatus(`自动刷新中｜上次刷新 ${new Date().toLocaleTimeString()}`);
 }
@@ -3897,6 +3961,94 @@ def admin_withdrawal_review(withdrawal_id):
             rollback_database()
             return jsonify({"code":500,"msg":"提现审核更新失败"}), 500
     return jsonify({"code":200,"msg":"提现审核已更新","data":{"id":withdrawal_id,"status":status}})
+
+
+def format_storage_audit_row(row):
+    metadata_text = row[8] or "{}"
+    try:
+        metadata = json.loads(metadata_text)
+        if not isinstance(metadata, dict):
+            metadata = {}
+    except Exception:
+        metadata = {}
+    return {
+        "id": row[0],
+        "event_type": row[1] or "",
+        "file_hash": row[2] or "",
+        "chunk_index": row[3],
+        "node_address": row[4] or "",
+        "request_id": row[5] or "",
+        "status": row[6] or "",
+        "message": row[7] or "",
+        "metadata": metadata,
+        "metadata_json": metadata_text,
+        "created_at": str(row[9]) if row[9] else "",
+    }
+
+
+def select_storage_audit_rows(args):
+    where = []
+    params = []
+    for field in ("file_hash", "node_address", "event_type", "status"):
+        value = str(args.get(field) or "").strip()
+        if value:
+            where.append(f"{field}=%s")
+            params.append(value)
+    from_time = str(args.get("from") or "").strip()
+    to_time = str(args.get("to") or "").strip()
+    if from_time:
+        where.append("created_at>=%s")
+        params.append(from_time)
+    if to_time:
+        where.append("created_at<=%s")
+        params.append(to_time)
+    limit = min(max(int(args.get("limit", 200) or 200), 1), 1000)
+    sql = """
+        select id,event_type,file_hash,chunk_index,node_address,request_id,status,message,metadata_json,created_at
+        from storage_audit_log
+    """
+    if where:
+        sql += " where " + " and ".join(where)
+    sql += " order by created_at desc,id desc limit %s"
+    params.append(limit)
+    current_cursor().execute(sql, tuple(params))
+    return [format_storage_audit_row(row) for row in current_cursor().fetchall()]
+
+
+@app.route("/api/admin/audit/storage", methods=["GET"])
+def admin_storage_audit_list():
+    rows = select_storage_audit_rows(request.args)
+    return jsonify({"code":200,"data":rows})
+
+
+@app.route("/api/admin/audit/storage/export", methods=["GET"])
+def admin_storage_audit_export():
+    rows = select_storage_audit_rows(request.args)
+    export_format = str(request.args.get("format") or "json").strip().lower()
+    if export_format == "csv":
+        output = io.StringIO()
+        writer = csv.DictWriter(
+            output,
+            fieldnames=[
+                "id",
+                "event_type",
+                "file_hash",
+                "chunk_index",
+                "node_address",
+                "request_id",
+                "status",
+                "message",
+                "metadata_json",
+                "created_at",
+            ],
+        )
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({key: row.get(key, "") for key in writer.fieldnames})
+        response = app.response_class(output.getvalue(), mimetype="text/csv")
+        response.headers["Content-Disposition"] = "attachment; filename=storage-audit.csv"
+        return response
+    return jsonify({"code":200,"data":rows})
 
 
 @app.route("/api/admin/users", methods=["GET"])
