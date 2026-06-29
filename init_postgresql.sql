@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS node_power (
   storage_free_gb double precision DEFAULT 0,
   storage_quota_gb double precision DEFAULT 0,
   storage_available_gb double precision DEFAULT 0,
+  storage_api_url varchar(255) DEFAULT '',
   online_duration integer DEFAULT 0,
   upload_bandwidth double precision DEFAULT 0,
   update_time timestamp DEFAULT CURRENT_TIMESTAMP

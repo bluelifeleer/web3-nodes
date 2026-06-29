@@ -11,6 +11,7 @@ import tempfile
 import threading
 import secrets
 import base64
+import webbrowser
 from pathlib import Path
 import os
 import json
@@ -55,6 +56,9 @@ CLIENT_MANAGE_HTML = """
       margin: 0 auto;
       padding: 24px;
     }
+    .node-console-shell {
+      max-width: 1180px;
+    }
     h1 {
       margin: 0 0 10px;
       font-size: 30px;
@@ -67,6 +71,10 @@ CLIENT_MANAGE_HTML = """
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
       gap: 16px;
+    }
+    .node-hero-grid {
+      grid-template-columns: minmax(0, 1.2fr) minmax(320px, .8fr);
+      align-items: stretch;
     }
     section {
       background: #ffffff;
@@ -87,6 +95,9 @@ CLIENT_MANAGE_HTML = """
       grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
       gap: 12px;
       margin-bottom: 12px;
+    }
+    .node-kpi-board {
+      grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
     }
     .stat {
       border: 1px solid #e3e9f3;
@@ -173,6 +184,13 @@ CLIENT_MANAGE_HTML = """
       gap: 12px;
       align-items: flex-start;
     }
+    .list li.local-shard-card {
+      padding: 14px;
+      margin-top: 10px;
+      border: 1px solid #e3e9f3;
+      border-radius: 8px;
+      background: #f9fbff;
+    }
     .list li:first-child {
       border-top: 0;
       padding-top: 0;
@@ -190,8 +208,20 @@ CLIENT_MANAGE_HTML = """
       font-family: Consolas, "Courier New", monospace;
       word-break: break-all;
     }
+    .usage-meter {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 8px;
+      border-radius: 999px;
+      background: #e8f8f2;
+      color: #116454;
+      font-weight: 700;
+      font-size: 12px;
+    }
     @media (max-width: 720px) {
       main { padding: 16px; }
+      .node-hero-grid { grid-template-columns: 1fr; }
       h1 { font-size: 26px; }
       .list li {
         flex-direction: column;
@@ -202,14 +232,14 @@ CLIENT_MANAGE_HTML = """
       }
     }
   </style>
-  <main>
+  <main class="node-console-shell">
     <h1>节点控制台</h1>
     <p class="subhead">本地管理页只访问本机接口，不直接暴露服务端地址。</p>
 
-    <div class="grid">
+    <div class="grid node-hero-grid">
       <section>
         <h2>运行概览</h2>
-        <div class="stats">
+        <div class="stats node-kpi-board">
           <div class="stat">
             <span class="label">运行状态</span>
             <div id="runningState" class="value">-</div>
@@ -231,7 +261,7 @@ CLIENT_MANAGE_HTML = """
 
       <section>
         <h2>目录健康与容量</h2>
-        <div class="stats">
+        <div class="stats node-kpi-board">
           <div class="stat">
             <span class="label">目录状态</span>
             <div id="storageState" class="value">-</div>
@@ -256,9 +286,13 @@ CLIENT_MANAGE_HTML = """
         <h2>存储目录管理</h2>
         <form id="storageForm">
           <input id="storageDirInput" name="storage_dir" placeholder="输入新的本地存储目录，例如 D:\\web3-node-data" />
+          <input id="storageQuotaInput" name="storage_quota_gb" inputmode="decimal" placeholder="目录可用容量 GB，必填" />
           <button type="submit">添加目录 / 更新目录</button>
           <button class="secondary" id="refreshButton" type="button">重新检测</button>
         </form>
+        <ul id="storageDirectoryList" class="list">
+          <li><span class="muted">暂无目录</span></li>
+        </ul>
         <div id="storageMessage" class="message"></div>
       </section>
 
@@ -309,6 +343,13 @@ CLIENT_MANAGE_HTML = """
       </section>
 
       <section class="wide">
+        <h2>本机已存文件 <span id="localShardUsage" class="usage-meter">0 B</span></h2>
+        <ul id="localShardList" class="list">
+          <li><span class="muted">暂无本机分片</span></li>
+        </ul>
+      </section>
+
+      <section class="wide">
         <h2>控制操作</h2>
         <div class="toolbar">
           <button class="danger" id="stopButton" type="button">停止节点</button>
@@ -324,6 +365,19 @@ CLIENT_MANAGE_HTML = """
     const formatAmount = (value) => {
       if (value === null || value === undefined || value === "") return "-";
       return String(value);
+    };
+    const formatBytes = (bytes) => {
+      const value = Number(bytes || 0);
+      if (!Number.isFinite(value) || value <= 0) return "0 B";
+      if (value >= 1024 * 1024 * 1024) return `${(value / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+      if (value >= 1024 * 1024) return `${(value / (1024 * 1024)).toFixed(2)} MB`;
+      if (value >= 1024) return `${(value / 1024).toFixed(2)} KB`;
+      return `${Math.round(value)} B`;
+    };
+    const formatStorageDisplay = (item, key = "storage_used_gb") => {
+      if (item && item.storage_used_display) return item.storage_used_display;
+      if (item && item.storage_used_bytes !== undefined) return formatBytes(item.storage_used_bytes);
+      return formatAmount(item ? item[key] : "") + " GB";
     };
     const setMessage = (id, text, isError = false) => {
       const node = document.getElementById(id);
@@ -360,14 +414,74 @@ CLIENT_MANAGE_HTML = """
       document.getElementById("lastMessage").textContent = data.last_notice || data.last_error || "-";
       document.getElementById("storageState").textContent = storage.storage_status || "-";
       document.getElementById("storageTotal").textContent = formatAmount(storage.storage_total_gb) + " GB";
-      document.getElementById("storageUsed").textContent = formatAmount(storage.storage_used_gb) + " GB";
+      document.getElementById("storageUsed").textContent = formatStorageDisplay(storage);
       document.getElementById("storageFree").textContent = formatAmount(storage.storage_free_gb) + " GB";
       document.getElementById("storagePath").textContent = storage.storage_path || data.storage_dir || "-";
       document.getElementById("storageDirInput").value = data.storage_dir || "";
+      document.getElementById("storageQuotaInput").value = "";
+      renderStorageDirectories(storage.storage_directories || data.storage_dirs || []);
+      renderLocalShards(data.stored_files || []);
       const pill = document.getElementById("controlState");
       pill.textContent = isRunning ? (heartbeatOk ? "运行中" : "重连中") : "已停止";
       pill.className = "status-pill" + (isRunning ? "" : " offline");
       document.getElementById("stopButton").disabled = !isRunning;
+    };
+    const renderStorageDirectories = (directories) => {
+      const list = document.getElementById("storageDirectoryList");
+      list.innerHTML = "";
+      const rows = Array.isArray(directories) ? directories : [];
+      if (!rows.length) {
+        list.innerHTML = '<li><span class="muted">暂无目录</span></li>';
+        return;
+      }
+      for (const item of rows) {
+        const li = document.createElement("li");
+        const left = document.createElement("div");
+        const path = document.createElement("strong");
+        path.className = "mono";
+        path.textContent = item.storage_dir || item.storage_path || "-";
+        const meta = document.createElement("div");
+        meta.className = "muted";
+        meta.textContent = `额度 ${formatAmount(item.storage_quota_gb)} GB / 已用 ${formatStorageDisplay(item)} / 可用 ${formatAmount(item.storage_available_gb || item.storage_free_gb)} GB`;
+        left.appendChild(path);
+        left.appendChild(meta);
+        const right = document.createElement("div");
+        right.textContent = item.storage_status || "-";
+        li.appendChild(left);
+        li.appendChild(right);
+        list.appendChild(li);
+      }
+    };
+    const renderLocalShards = (files) => {
+      const list = document.getElementById("localShardList");
+      const usage = document.getElementById("localShardUsage");
+      list.innerHTML = "";
+      const rows = Array.isArray(files) ? files : [];
+      const totalBytes = rows.reduce((sum, item) => sum + Number(item.storage_used_bytes || 0), 0);
+      usage.textContent = rows.length ? `${rows.length} 个文件 / ${formatBytes(totalBytes)}` : "0 B";
+      if (!rows.length) {
+        list.innerHTML = '<li><span class="muted">暂无本机分片</span></li>';
+        return;
+      }
+      for (const item of rows) {
+        const li = document.createElement("li");
+        li.className = "local-shard-card";
+        const left = document.createElement("div");
+        const hash = document.createElement("strong");
+        hash.className = "mono";
+        hash.textContent = item.file_hash || "-";
+        const meta = document.createElement("div");
+        meta.className = "muted";
+        meta.textContent = `分片 ${formatAmount(item.chunk_count)} / ${formatAmount(item.chunk_total)} ｜ ${item.storage_used_display || formatBytes(item.storage_used_bytes)} ｜ ${item.updated_at || ""}`;
+        left.appendChild(hash);
+        left.appendChild(meta);
+        const right = document.createElement("div");
+        right.className = "muted mono";
+        right.textContent = item.storage_dir || "";
+        li.appendChild(left);
+        li.appendChild(right);
+        list.appendChild(li);
+      }
     };
     const applyEarnings = (payload) => {
       if (!payload || !payload.ok) {
@@ -433,7 +547,8 @@ CLIENT_MANAGE_HTML = """
     async function updateStorage(event){
       event.preventDefault();
       const storageDir = document.getElementById("storageDirInput").value.trim();
-      const payload = await api("/api/storage", {method:"POST", body: JSON.stringify({storage_dir: storageDir})});
+      const storageQuota = document.getElementById("storageQuotaInput").value.trim();
+      const payload = await api("/api/storage", {method:"POST", body: JSON.stringify({storage_dir: storageDir, storage_quota_gb: storageQuota})});
       if (payload.ok) {
         applyStatus(payload);
         setMessage("storageMessage", "存储目录已更新并重新检测");
@@ -744,6 +859,51 @@ def read_local_shard(storage_dir, file_hash, chunk_index):
     return shard_path.read_bytes()
 
 
+def list_local_stored_files(state, max_items=50):
+    entries = normalize_storage_dirs(
+        state.get("storage_dir", ""),
+        state.get("storage_quota_gb", 0),
+        state.get("storage_dirs"),
+    )
+    rows = []
+    for entry in entries:
+        storage_dir = entry["storage_dir"]
+        manifest_dir = storage_store_dir(storage_dir) / "manifest"
+        if not manifest_dir.exists():
+            continue
+        for manifest_path in sorted(manifest_dir.glob("*.json"), key=lambda item: item.stat().st_mtime, reverse=True):
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                file_hash = validate_file_hash_value(manifest.get("file_hash") or manifest_path.stem)
+                chunks = manifest.get("chunks") if isinstance(manifest.get("chunks"), dict) else {}
+                storage_used_bytes = 0
+                for chunk_index, chunk_meta in chunks.items():
+                    if isinstance(chunk_meta, dict) and chunk_meta.get("chunk_size") is not None:
+                        try:
+                            storage_used_bytes += int(chunk_meta.get("chunk_size") or 0)
+                            continue
+                        except (TypeError, ValueError):
+                            pass
+                    try:
+                        storage_used_bytes += shard_file_path(storage_dir, file_hash, chunk_index).stat().st_size
+                    except Exception:
+                        continue
+                rows.append({
+                    "file_hash": file_hash,
+                    "chunk_count": len(chunks),
+                    "chunk_total": int(manifest.get("chunk_total") or 0),
+                    "storage_dir": storage_dir,
+                    "storage_used_bytes": storage_used_bytes,
+                    "storage_used_display": format_storage_bytes(storage_used_bytes),
+                    "updated_at": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(manifest_path.stat().st_mtime)),
+                })
+            except Exception:
+                continue
+            if len(rows) >= max_items:
+                return rows
+    return rows
+
+
 def get_directory_size_bytes(path):
     total = 0
     for file_path in path.rglob("*"):
@@ -755,15 +915,36 @@ def get_directory_size_bytes(path):
     return total
 
 
+def format_storage_bytes(num_bytes):
+    value = int(num_bytes or 0)
+    if value >= 1024 ** 3:
+        return f"{value / (1024 ** 3):.2f} GB"
+    if value >= 1024 ** 2:
+        return f"{value / (1024 ** 2):.2f} MB"
+    if value >= 1024:
+        return f"{value / 1024:.2f} KB"
+    return f"{value} B"
+
+
+def storage_bytes_from_gb(value):
+    try:
+        return int(float(value or 0) * (1024 ** 3))
+    except (TypeError, ValueError):
+        return 0
+
+
 def inspect_storage_dir(storage_dir, user_addr="", node_mac="", storage_quota_gb=0):
     if not storage_dir:
         storage_used_gb = get_local_disk_use("")
+        storage_used_bytes = storage_bytes_from_gb(storage_used_gb)
         return {
             "storage_path": "",
             "storage_status": "required",
             "storage_error": "未指定存储目录",
             "storage_total_gb": 0,
             "storage_used_gb": storage_used_gb,
+            "storage_used_bytes": storage_used_bytes,
+            "storage_used_display": format_storage_bytes(storage_used_bytes),
             "storage_free_gb": 0,
             "storage_quota_gb": 0,
             "storage_available_gb": 0,
@@ -792,16 +973,18 @@ def inspect_storage_dir(storage_dir, user_addr="", node_mac="", storage_quota_gb
         dir_used = get_directory_size_bytes(store_path)
         quota = float(storage_quota_gb or 0)
         physical_free = round(usage.free / (1024 ** 3), 2)
-        used_gb = round(dir_used / (1024 ** 3), 2)
+        used_gb = round(dir_used / (1024 ** 3), 8)
         available_gb = max(0, min(quota - used_gb, physical_free)) if quota > 0 else 0
         hide_warning = prepared.get("hide_warning", "") if prepared else ""
         return {
             "storage_path": str(path),
             "storage_status": "ok" if quota > 0 else "quota_required",
             "storage_error": hide_warning,
-            "storage_total_gb": round(usage.total / (1024 ** 3), 2),
+            "storage_total_gb": round(quota, 2) if quota > 0 else 0,
             "storage_used_gb": used_gb,
-            "storage_free_gb": physical_free,
+            "storage_used_bytes": dir_used,
+            "storage_used_display": format_storage_bytes(dir_used),
+            "storage_free_gb": round(available_gb, 2),
             "storage_quota_gb": quota,
             "storage_available_gb": round(available_gb, 2),
         }
@@ -812,27 +995,124 @@ def inspect_storage_dir(storage_dir, user_addr="", node_mac="", storage_quota_gb
             "storage_error": str(exc),
             "storage_total_gb": 0,
             "storage_used_gb": 0,
+            "storage_used_bytes": 0,
+            "storage_used_display": "0 B",
             "storage_free_gb": 0,
             "storage_quota_gb": float(storage_quota_gb or 0),
             "storage_available_gb": 0,
         }
 
 
-def inspect_storage_state(storage_dir, user_addr="", node_mac="", storage_quota_gb=0):
+def normalize_storage_dirs(storage_dir="", storage_quota_gb=0, storage_dirs=None):
+    entries = []
+
+    def add_entry(path_value, quota_value):
+        path_text = str(path_value or "").strip()
+        if not path_text:
+            return
+        try:
+            quota = float(quota_value or 0)
+        except (TypeError, ValueError):
+            quota = 0.0
+        for entry in entries:
+            if entry["storage_dir"] == path_text:
+                entry["storage_quota_gb"] = quota
+                return
+        entries.append({"storage_dir": path_text, "storage_quota_gb": quota})
+
+    if isinstance(storage_dirs, (list, tuple)):
+        for item in storage_dirs:
+            if isinstance(item, dict):
+                add_entry(item.get("storage_dir") or item.get("path"), item.get("storage_quota_gb") or item.get("quota_gb"))
+            else:
+                add_entry(item, 0)
+    add_entry(storage_dir, storage_quota_gb)
+    return entries
+
+
+def inspect_one_storage_dir(storage_dir, user_addr="", node_mac="", storage_quota_gb=0):
     try:
         return inspect_storage_dir(storage_dir, user_addr, node_mac, storage_quota_gb)
     except TypeError:
         return inspect_storage_dir(storage_dir)
 
 
-def create_client_state(server_url, user_addr, node_mac, storage_dir, manage_port, storage_quota_gb=0, storage_explicit=True):
+def inspect_storage_dirs(storage_dirs, user_addr="", node_mac=""):
+    entries = normalize_storage_dirs(storage_dirs=storage_dirs)
+    if not entries:
+        return inspect_one_storage_dir("", user_addr, node_mac, 0)
+    directory_details = []
+    for entry in entries:
+        detail = inspect_one_storage_dir(
+            entry["storage_dir"],
+            user_addr,
+            node_mac,
+            entry.get("storage_quota_gb", 0),
+        )
+        detail = dict(detail)
+        detail["storage_dir"] = entry["storage_dir"]
+        detail["storage_quota_gb"] = float(entry.get("storage_quota_gb") or detail.get("storage_quota_gb") or 0)
+        if "storage_available_gb" not in detail:
+            detail["storage_available_gb"] = max(
+                0,
+                float(detail.get("storage_quota_gb") or 0) - float(detail.get("storage_used_gb") or 0),
+            )
+        if "storage_used_bytes" not in detail:
+            detail["storage_used_bytes"] = storage_bytes_from_gb(detail.get("storage_used_gb"))
+        if "storage_used_display" not in detail:
+            detail["storage_used_display"] = format_storage_bytes(detail.get("storage_used_bytes"))
+        directory_details.append(detail)
+    total_quota = round(sum(float(item.get("storage_quota_gb") or 0) for item in directory_details), 2)
+    total_used_bytes = sum(int(item.get("storage_used_bytes") or 0) for item in directory_details)
+    total_used = round(total_used_bytes / (1024 ** 3), 8)
+    total_available = round(sum(float(item.get("storage_available_gb") or item.get("storage_free_gb") or 0) for item in directory_details), 2)
+    ok_count = sum(1 for item in directory_details if item.get("storage_status") == "ok")
+    status = "ok" if ok_count and total_available > 0 else directory_details[0].get("storage_status", "unavailable")
+    errors = [str(item.get("storage_error") or "") for item in directory_details if item.get("storage_error")]
+    return {
+        "storage_path": "; ".join(item["storage_dir"] for item in directory_details),
+        "storage_status": status,
+        "storage_error": "; ".join(errors),
+        "storage_total_gb": total_quota,
+        "storage_used_gb": total_used,
+        "storage_used_bytes": total_used_bytes,
+        "storage_used_display": format_storage_bytes(total_used_bytes),
+        "storage_free_gb": total_available,
+        "storage_quota_gb": total_quota,
+        "storage_available_gb": total_available,
+        "storage_directories": directory_details,
+    }
+
+
+def inspect_storage_state(storage_dir, user_addr="", node_mac="", storage_quota_gb=0, storage_dirs=None):
+    if storage_dirs is not None or isinstance(storage_dir, (list, tuple)):
+        return inspect_storage_dirs(storage_dirs if storage_dirs is not None else storage_dir, user_addr, node_mac)
+    return inspect_one_storage_dir(storage_dir, user_addr, node_mac, storage_quota_gb)
+
+
+def select_storage_dir_for_shard(state, file_hash="", chunk_index=0):
+    entries = normalize_storage_dirs(
+        state.get("storage_dir", ""),
+        state.get("storage_quota_gb", 0),
+        state.get("storage_dirs"),
+    )
+    if not entries:
+        return state.get("storage_dir", "")
+    return entries[validate_chunk_index(chunk_index) % len(entries)]["storage_dir"]
+
+
+def create_client_state(server_url, user_addr, node_mac, storage_dir, manage_port, storage_quota_gb=0, storage_explicit=True, storage_dirs=None):
+    normalized_dirs = normalize_storage_dirs(storage_dir, storage_quota_gb, storage_dirs)
+    primary_dir = normalized_dirs[0]["storage_dir"] if normalized_dirs else storage_dir
+    total_quota = round(sum(float(item.get("storage_quota_gb") or 0) for item in normalized_dirs), 2)
     return {
         "server_url": server_url,
         "user_addr": user_addr,
         "node_mac": node_mac,
-        "storage_dir": storage_dir,
+        "storage_dir": primary_dir,
+        "storage_dirs": normalized_dirs,
         "storage_explicit": storage_explicit,
-        "storage_quota_gb": float(storage_quota_gb or 0),
+        "storage_quota_gb": total_quota,
         "manage_port": manage_port,
         "csrf_token": secrets.token_urlsafe(24),
         "running": True,
@@ -841,7 +1121,7 @@ def create_client_state(server_url, user_addr, node_mac, storage_dir, manage_por
         "last_heartbeat": "",
         "last_error": "",
         "last_notice": "",
-        "storage": inspect_storage_state(storage_dir, user_addr, node_mac, storage_quota_gb),
+        "storage": inspect_storage_state(primary_dir, user_addr, node_mac, total_quota, normalized_dirs),
     }
 
 
@@ -855,9 +1135,11 @@ def client_status_payload(state):
         "last_error": state["last_error"],
         "last_notice": state.get("last_notice", ""),
         "storage_dir": state["storage_dir"],
+        "storage_dirs": state.get("storage_dirs", []),
         "storage_explicit": state.get("storage_explicit", True),
         "storage_quota_gb": state.get("storage_quota_gb", 0),
         "storage": state["storage"],
+        "stored_files": list_local_stored_files(state),
     }
 
 
@@ -867,6 +1149,7 @@ def build_heartbeat_payload(state, upload_bw):
         state.get("user_addr", ""),
         state.get("node_mac", ""),
         state.get("storage_quota_gb", 0),
+        state.get("storage_dirs"),
     )
     state["storage"] = storage_info
     return {
@@ -874,6 +1157,7 @@ def build_heartbeat_payload(state, upload_bw):
         "node_mac": state["node_mac"],
         "disk_used": storage_info["storage_used_gb"],
         "upload_bw": upload_bw,
+        "storage_api_url": f"http://127.0.0.1:{int(state.get('manage_port') or MANAGE_PORT)}",
         **storage_info,
     }
 
@@ -1071,7 +1355,7 @@ def make_manage_handler(state):
                 self._send_json({"ok": False, "error": "invalid json body"}, status=400)
                 return None
 
-        def _read_mutation_json(self):
+        def _read_mutation_json(self, require_csrf=True):
             if not self._validate_mutation_source():
                 return None
             content_type = self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
@@ -1081,10 +1365,11 @@ def make_manage_handler(state):
             data = self._read_json()
             if data is None:
                 return None
-            token = self.headers.get("X-CSRF-Token") or data.get("csrf_token")
-            if token != state.get("csrf_token"):
-                self._send_json({"ok": False, "error": "invalid csrf token"}, status=403)
-                return None
+            if require_csrf:
+                token = self.headers.get("X-CSRF-Token") or data.get("csrf_token")
+                if token != state.get("csrf_token"):
+                    self._send_json({"ok": False, "error": "invalid csrf token"}, status=403)
+                    return None
             return data
 
         def _send_json(self, payload, status=200):
@@ -1119,7 +1404,19 @@ def make_manage_handler(state):
                 try:
                     file_hash = parts[4]
                     chunk_index = parts[5]
-                    chunk = read_local_shard(state["storage_dir"], file_hash, chunk_index)
+                    chunk = None
+                    for entry in normalize_storage_dirs(
+                        state.get("storage_dir", ""),
+                        state.get("storage_quota_gb", 0),
+                        state.get("storage_dirs"),
+                    ):
+                        try:
+                            chunk = read_local_shard(entry["storage_dir"], file_hash, chunk_index)
+                            break
+                        except FileNotFoundError:
+                            continue
+                    if chunk is None:
+                        raise FileNotFoundError("shard not found")
                     chunk_hash = hashlib.sha256(chunk).hexdigest()
                     self._send_json({
                         "ok": True,
@@ -1140,7 +1437,16 @@ def make_manage_handler(state):
                     self._send_json({"ok": False, "error": "invalid manifest path"}, status=400)
                     return
                 try:
-                    self._send_json({"ok": True, "data": read_local_manifest(state["storage_dir"], parts[4])})
+                    merged = {"file_hash": validate_file_hash_value(parts[4]), "chunks": {}}
+                    for entry in normalize_storage_dirs(
+                        state.get("storage_dir", ""),
+                        state.get("storage_quota_gb", 0),
+                        state.get("storage_dirs"),
+                    ):
+                        manifest = read_local_manifest(entry["storage_dir"], parts[4])
+                        merged["chunk_total"] = manifest.get("chunk_total", merged.get("chunk_total", 0))
+                        merged.setdefault("chunks", {}).update(manifest.get("chunks") or {})
+                    self._send_json({"ok": True, "data": merged})
                 except Exception as exc:
                     self._send_json({"ok": False, "error": str(exc)}, status=400)
             elif path == "/api/earnings":
@@ -1156,14 +1462,15 @@ def make_manage_handler(state):
             if not self._validate_host():
                 return
             path = self._route_path()
-            data = self._read_mutation_json()
+            data = self._read_mutation_json(require_csrf=path != "/api/node/storage/shards")
             if data is None:
                 return
             if path == "/api/node/storage/shards":
                 try:
                     chunk_bytes = base64.b64decode(str(data.get("chunk_b64") or ""), validate=True)
+                    target_storage_dir = select_storage_dir_for_shard(state, data.get("file_hash"), data.get("chunk_index"))
                     metadata = write_local_shard(
-                        state["storage_dir"],
+                        target_storage_dir,
                         state["user_addr"],
                         state["node_mac"],
                         data.get("file_hash"),
@@ -1177,21 +1484,41 @@ def make_manage_handler(state):
                         state.get("user_addr", ""),
                         state.get("node_mac", ""),
                         state.get("storage_quota_gb", 0),
+                        state.get("storage_dirs"),
                     )
                     self._send_json({"ok": True, "data": metadata})
                 except Exception as exc:
                     self._send_json({"ok": False, "error": str(exc)}, status=400)
             elif path == "/api/storage":
                 storage_dir = str(data.get("storage_dir") or data.get("path") or "").strip()
-                if storage_dir:
-                    state["storage_dir"] = storage_dir
-                if "storage_quota_gb" in data:
-                    state["storage_quota_gb"] = float(data.get("storage_quota_gb") or 0)
+                try:
+                    storage_quota_gb = float(data.get("storage_quota_gb") or data.get("quota_gb") or 0)
+                except (TypeError, ValueError):
+                    storage_quota_gb = 0
+                if not storage_dir:
+                    self._send_json({"ok": False, "error": "请指定存储目录"}, status=400)
+                    return
+                if storage_quota_gb <= 0:
+                    self._send_json({"ok": False, "error": "请设置目录可用容量"}, status=400)
+                    return
+                existing_dirs = [
+                    item for item in state.get("storage_dirs", [])
+                    if float(item.get("storage_quota_gb") or 0) > 0
+                ]
+                state["storage_dirs"] = normalize_storage_dirs(
+                    storage_dir,
+                    storage_quota_gb,
+                    existing_dirs,
+                )
+                state["storage_dir"] = state["storage_dirs"][0]["storage_dir"] if state["storage_dirs"] else storage_dir
+                state["storage_quota_gb"] = round(sum(item["storage_quota_gb"] for item in state["storage_dirs"]), 2)
+                state["storage_explicit"] = True
                 state["storage"] = inspect_storage_state(
                     state["storage_dir"],
                     state.get("user_addr", ""),
                     state.get("node_mac", ""),
                     state.get("storage_quota_gb", 0),
+                    state.get("storage_dirs"),
                 )
                 self._send_json({"ok": True, "data": client_status_payload(state)})
             elif path == "/api/refresh":
@@ -1200,6 +1527,7 @@ def make_manage_handler(state):
                     state.get("user_addr", ""),
                     state.get("node_mac", ""),
                     state.get("storage_quota_gb", 0),
+                    state.get("storage_dirs"),
                 )
                 self._send_json({"ok": True, "data": client_status_payload(state)})
             elif path == "/api/control/stop":
@@ -1219,6 +1547,22 @@ def start_manage_server(state):
     server = ThreadingHTTPServer(("127.0.0.1", int(state["manage_port"])), make_manage_handler(state))
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return server
+
+
+def should_open_client_console():
+    return os.getenv("NODE_OPEN_CLIENT_CONSOLE", "1").strip().lower() not in ("0", "false", "no", "off")
+
+
+def open_client_console(manage_port, open_func=None):
+    url = f"http://127.0.0.1:{int(manage_port)}/"
+    opener = open_func or webbrowser.open_new_tab
+    try:
+        opener(url)
+        safe_print(f"🌐 已自动打开节点管理页：{url}")
+        return True
+    except Exception as exc:
+        safe_print(f"⚠️ 自动打开节点管理页失败：{exc}｜请手动访问 {url}")
+        return False
 
 # 生成唯一设备指纹（防多开、防作弊）
 def get_device_mac():
@@ -1317,6 +1661,8 @@ def client_run():
     try:
         manage_server = start_manage_server(state)
         safe_print(f"🌐 节点管理页：http://127.0.0.1:{MANAGE_PORT}")
+        if should_open_client_console():
+            open_client_console(MANAGE_PORT)
     except Exception as exc:
         state["last_error"] = f"管理页启动失败：{exc}"
         safe_print(f"❌ 管理页启动失败：{exc}")

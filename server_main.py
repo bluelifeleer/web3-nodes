@@ -26,6 +26,7 @@ except ImportError:
 import os
 import shutil
 import json
+import subprocess
 try:
     import reedsolo
 except ImportError:
@@ -273,9 +274,12 @@ ADMIN_PROTECTED_PATHS = {
 ADMIN_PUBLIC_PATHS = {
     "/",
     "/admin",
+    "/admin/console",
     "/admin/login",
+    "/console",
     "/api/admin/login",
     "/api/health",
+    "/user/console",
 }
 
 
@@ -332,6 +336,117 @@ COMMERCIAL_PAGE_CSS = '''
         th{background:#edf7f6!important;color:#183b44;}
         .status,.notice,.linkbox,pre{border-radius:8px;}
         @media (max-width:800px){.modern-nav,.page-hero{align-items:flex-start;flex-direction:column;display:flex;}.nav-actions{width:100%;}.nav-actions a{flex:1;text-align:center;}.page-hero h1{font-size:28px;}}
+'''
+
+CONSOLE_SHELL_CSS = '''
+        .unified-console-shell{display:grid;grid-template-columns:248px minmax(0,1fr);min-height:100vh;background:#eef4f7;}
+        .console-sidebar{position:sticky;top:0;height:100vh;padding:18px;background:#102a36;color:#e8f8f2;overflow:auto;}
+        .console-brand{display:flex;align-items:center;gap:10px;font-weight:900;margin-bottom:22px;}
+        .console-brand-mark{width:32px;height:32px;border-radius:8px;background:linear-gradient(135deg,#14b8a6,#f0b429);}
+        .console-role-label{display:inline-flex;margin-bottom:14px;padding:6px 9px;border-radius:999px;background:rgba(20,184,166,.18);color:#bff7ed;font-size:12px;font-weight:800;}
+        .console-sidebar nav{display:grid;gap:8px;}
+        .console-sidebar a{display:flex;align-items:center;gap:8px;padding:10px 12px;border-radius:8px;color:#d9f8f3;border:1px solid transparent;}
+        .console-sidebar a:hover{background:rgba(255,255,255,.08);border-color:rgba(255,255,255,.12);}
+        .console-sidebar [data-permission="admin"]{box-shadow:inset 3px 0 0 rgba(240,180,41,.9);}
+        .console-sidebar [data-permission="user"]{box-shadow:inset 3px 0 0 rgba(20,184,166,.9);}
+        .console-main{min-width:0;padding:0;}
+        .console-topbar{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:16px;padding:12px 14px;border:1px solid rgba(148,163,184,.26);border-radius:8px;background:rgba(255,255,255,.76);}
+        .console-permission-note{color:#64748b;font-size:13px;}
+        @media (max-width:900px){.unified-console-shell{grid-template-columns:1fr;}.console-sidebar{position:relative;height:auto;}.console-sidebar nav{grid-template-columns:repeat(auto-fit,minmax(150px,1fr));}.console-main{padding:0;}}
+'''
+
+CONSOLE_SIDEBAR_HTML = '''
+        <aside class="console-sidebar">
+            <div class="console-brand"><span class="console-brand-mark"></span><span>Web3 Nodes 管理台</span></div>
+            <span class="console-role-label">统一权限入口</span>
+            <nav>
+                <a data-permission="user" href="/user/dashboard">用户工作台</a>
+                <a data-permission="user" href="/user/upload">上传文件</a>
+                <a data-permission="user" href="/user/dashboard#sharesBox">我的分享</a>
+                <a data-permission="user" href="/user/dashboard#withdrawalsBox">收益提现</a>
+                <a data-permission="admin" href="/admin">管理员</a>
+                <a data-permission="admin" href="/admin#nodeTable">节点管理</a>
+                <a data-permission="admin" href="/admin#storageAuditTable">审计日志</a>
+                <a data-permission="admin" href="/admin#fileTable">文件存证</a>
+            </nav>
+        </aside>
+'''
+
+MANAGEMENT_CONSOLE_HTML = '''
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>统一管理台</title>
+    <style>
+''' + COMMERCIAL_PAGE_CSS + CONSOLE_SHELL_CSS + '''
+        .console-home-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px;}
+        .console-home-card{padding:16px;}
+    </style>
+</head>
+<body class="commercial-page unified-console-page">
+    <div class="unified-console-shell" data-console-role="{{ role }}">
+''' + CONSOLE_SIDEBAR_HTML + '''
+        <main class="console-main">
+            <div class="page-shell">
+                <div class="console-topbar">
+                    <strong>统一管理台</strong>
+                    <span class="console-permission-note">当前角色：{{ role_label }}，数据权限由用户 token / 管理员 token 控制。</span>
+                </div>
+                <header class="page-hero">
+                    <div>
+                        <span class="page-kicker">前后端统一入口</span>
+                        <h1>{{ role_title }}</h1>
+                        <p>用户和管理员共用一套管理台框架，左侧按权限切换模块，内容区复用现有 API 与业务能力。</p>
+                    </div>
+                </header>
+                <section class="console-home-grid">
+                    <div class="commercial-card console-home-card" data-permission="user">
+                        <h3>用户工作台</h3>
+                        <p>文件、分享、收益、提现集中管理。</p>
+                        <a class="btn" href="/user/dashboard">进入用户管理</a>
+                    </div>
+                    <div class="commercial-card console-home-card" data-permission="user">
+                        <h3>上传文件</h3>
+                        <p>上传后自动分片、加密、备份并生成分享能力。</p>
+                        <a class="btn" href="/user/upload">上传文件</a>
+                    </div>
+                    <div class="commercial-card console-home-card" data-permission="admin">
+                        <h3>管理员</h3>
+                        <p>节点、容量、文件、提现和审计统一运营。</p>
+                        <a class="btn" href="/admin">进入管理员后台</a>
+                    </div>
+                </section>
+            </div>
+        </main>
+    </div>
+    <script>
+    function requireUserLogin(){
+        if(!localStorage.getItem("user_token")){
+            const loginUrl = new URL("/user/login", window.location.origin);
+            loginUrl.searchParams.set("next", window.location.pathname + window.location.search);
+            window.location.href = loginUrl.toString();
+            return false;
+        }
+        return true;
+    }
+    function requireAdminLogin(){
+        if(!localStorage.getItem("admin_token")){
+            window.location.href = "/admin/login";
+            return false;
+        }
+        return true;
+    }
+    async function loadUserWorkspace(){ return fetch("/api/user/files", {headers: {"Authorization": `Bearer ${localStorage.getItem("user_token") || ""}`}}); }
+    async function loadAdminWorkspace(){ return fetch("/api/node_list", {headers: {"X-Admin-Token": localStorage.getItem("admin_token") || ""}}); }
+    document.addEventListener("DOMContentLoaded", () => {
+        const role = document.querySelector(".unified-console-shell").dataset.consoleRole;
+        if(role === "admin"){ requireAdminLogin(); }
+        if(role === "user"){ requireUserLogin(); }
+    });
+    </script>
+</body>
+</html>
 '''
 
 
@@ -779,7 +894,38 @@ def get_node_storage_api_url(node):
     template = os.getenv("NODE_STORAGE_API_URL_TEMPLATE", "").strip()
     if template:
         return template.format(node_address=urllib.parse.quote(raw)).rstrip("/")
+    if raw:
+        try:
+            current_cursor().execute(
+                """
+                select storage_api_url
+                from node_power
+                where user_address=%s
+                order by update_time desc
+                limit 1
+                """,
+                (raw,),
+            )
+            row = current_cursor().fetchone()
+            if row and row[0]:
+                return str(row[0]).strip().rstrip("/")
+        except Exception:
+            return ""
     return ""
+
+
+def select_storage_node_candidates(limit=COPY_NUM):
+    current_cursor().execute(f"""
+    select user_address
+    from node_power
+    where update_time > {node_alive_interval_sql(3)}
+      and storage_status=%s
+      and storage_available_gb > 0
+      and storage_api_url <> ''
+    order by storage_available_gb desc, update_time desc
+    limit %s
+    """, ("ok", int(limit)))
+    return [row[0] for row in current_cursor().fetchall()]
 
 
 def post_client_shard(node, shard, request_id=""):
@@ -1556,9 +1702,105 @@ def calculate_file_health(record, alive_nodes):
     }
 
 
+DEFAULT_IPFS_API_ADDR = "/ip4/127.0.0.1/tcp/5001"
+
+
+def normalize_ipfs_api_addr(value):
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    if raw.startswith("/"):
+        return raw
+    parsed = urllib.parse.urlparse(raw)
+    if parsed.scheme in ("http", "https") and parsed.hostname and parsed.port:
+        host = parsed.hostname
+        if ":" in host:
+            return f"/ip6/{host}/tcp/{parsed.port}"
+        return f"/ip4/{host}/tcp/{parsed.port}"
+    return raw
+
+
+def get_ipfs_api_addr():
+    for key in ("IPFS_API_ADDR", "IPFS_API_MULTIADDR", "IPFS_API_URL"):
+        configured = normalize_ipfs_api_addr(os.getenv(key, ""))
+        if configured:
+            return configured
+    try:
+        configured = subprocess.check_output(
+            ["ipfs", "config", "Addresses.API"],
+            text=True,
+            timeout=3,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+        configured = normalize_ipfs_api_addr(configured)
+        if configured:
+            return configured
+    except Exception:
+        pass
+    return DEFAULT_IPFS_API_ADDR
+
+
+def ipfs_api_base_url(api_addr):
+    raw = normalize_ipfs_api_addr(api_addr) or DEFAULT_IPFS_API_ADDR
+    if raw.startswith("http://") or raw.startswith("https://"):
+        return raw.rstrip("/") + "/api/v0"
+    parts = [part for part in raw.split("/") if part]
+    host = "127.0.0.1"
+    port = "5001"
+    for index, part in enumerate(parts):
+        if part in ("ip4", "ip6", "dns", "dns4", "dns6") and index + 1 < len(parts):
+            host = parts[index + 1]
+        if part == "tcp" and index + 1 < len(parts):
+            port = parts[index + 1]
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+    return f"http://{host}:{port}/api/v0"
+
+
+class HttpIPFSClient:
+    def __init__(self, api_addr=None, timeout=30):
+        self.api_addr = normalize_ipfs_api_addr(api_addr) or get_ipfs_api_addr()
+        self.base_url = ipfs_api_base_url(self.api_addr)
+        self.timeout = timeout
+
+    def _post(self, endpoint, **kwargs):
+        response = requests.post(f"{self.base_url}/{endpoint.lstrip('/')}", timeout=self.timeout, **kwargs)
+        response.raise_for_status()
+        return response
+
+    def id(self):
+        return self._post("id").json()
+
+    def repo_stat(self):
+        return self._post("repo/stat").json()
+
+    def add_bytes(self, data):
+        response = self._post("add", files={"file": ("file", bytes(data))})
+        payload = response.json()
+        return payload.get("Hash") or payload.get("Cid") or payload.get("Name", "")
+
+    def cat(self, cid):
+        return self._post("cat", params={"arg": cid}).content
+
+    def close(self):
+        return None
+
+
 def get_ipfs_client():
-    import ipfshttpclient
-    return ipfshttpclient.connect('/ip4/127.0.0.1/tcp/5001')
+    client_module = globals().get("ipfshttpclient")
+    if client_module is None:
+        try:
+            import ipfshttpclient as client_module
+            globals()["ipfshttpclient"] = client_module
+        except Exception:
+            return HttpIPFSClient(get_ipfs_api_addr())
+    api_addr = get_ipfs_api_addr()
+    try:
+        return client_module.connect(api_addr)
+    except Exception as exc:
+        if "Unsupported daemon version" in str(exc):
+            return HttpIPFSClient(api_addr)
+        raise
 
 
 def read_ipfs_status(client_factory=get_ipfs_client):
@@ -1631,6 +1873,9 @@ def format_node_record(item):
         "storage_total_gb": item[12] if len(item) > 12 and item[12] is not None else 0,
         "storage_used_gb": item[13] if len(item) > 13 and item[13] is not None else item[3] or 0,
         "storage_free_gb": item[14] if len(item) > 14 and item[14] is not None else 0,
+        "storage_quota_gb": item[15] if len(item) > 15 and item[15] is not None else 0,
+        "storage_available_gb": item[16] if len(item) > 16 and item[16] is not None else 0,
+        "storage_api_url": item[17] if len(item) > 17 and item[17] else "",
     }
 
 
@@ -1667,7 +1912,8 @@ def select_node_rows():
     np.disk_used,np.online_duration,np.upload_bandwidth,np.update_time,
     nl.country,nl.city,
     np.storage_path,np.storage_status,np.storage_error,
-    np.storage_total_gb,np.storage_used_gb,np.storage_free_gb
+    np.storage_total_gb,np.storage_used_gb,np.storage_free_gb,
+    np.storage_quota_gb,np.storage_available_gb,np.storage_api_url
     FROM user_node un
     LEFT JOIN node_power np ON un.user_address=np.user_address
     LEFT JOIN node_location nl ON un.user_address=nl.user_address
@@ -1716,13 +1962,14 @@ def node_heartbeat():
     storage_free_gb = float(data.get("storage_free_gb") or 0)
     storage_quota_gb = float(data.get("storage_quota_gb") or 0)
     storage_available_gb = float(data.get("storage_available_gb") or 0)
+    storage_api_url = str(data.get("storage_api_url") or "")[:255]
 
     # 输入心跳数据
     print(f"{user_addr} {node_mac} {disk_used} {upload_bw}")
 
     current_cursor().execute(
-        "update node_power set disk_used=%s,upload_bandwidth=%s,storage_path=%s,storage_status=%s,storage_error=%s,storage_total_gb=%s,storage_used_gb=%s,storage_free_gb=%s,storage_quota_gb=%s,storage_available_gb=%s,online_duration=online_duration+1,update_time=%s where user_address=%s and node_mac=%s",
-        (disk_used,upload_bw,storage_path,storage_status,storage_error,storage_total_gb,storage_used_gb,storage_free_gb,storage_quota_gb,storage_available_gb,datetime.now(),user_addr,node_mac)
+        "update node_power set disk_used=%s,upload_bandwidth=%s,storage_path=%s,storage_status=%s,storage_error=%s,storage_total_gb=%s,storage_used_gb=%s,storage_free_gb=%s,storage_quota_gb=%s,storage_available_gb=%s,storage_api_url=%s,online_duration=online_duration+1,update_time=%s where user_address=%s and node_mac=%s",
+        (disk_used,upload_bw,storage_path,storage_status,storage_error,storage_total_gb,storage_used_gb,storage_free_gb,storage_quota_gb,storage_available_gb,storage_api_url,datetime.now(),user_addr,node_mac)
     )
     return jsonify({"code":200,"msg":"心跳上报成功"})
 
@@ -1923,7 +2170,7 @@ HOME_HTML = '''
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Web3 节点激励与文件分享系统</title>
     <style>
-''' + COMMERCIAL_PAGE_CSS + '''
+''' + COMMERCIAL_PAGE_CSS + CONSOLE_SHELL_CSS + '''
         *{box-sizing:border-box;}
         body{margin:0;font-family:Arial,"Microsoft YaHei",sans-serif;background:#f4f7fb;color:#172033;}
         a{text-decoration:none;color:inherit;}
@@ -2061,7 +2308,7 @@ ADMIN_LOGIN_HTML = '''
     <meta charset="UTF-8">
     <title>后台登录</title>
     <style>
-''' + COMMERCIAL_PAGE_CSS + '''
+''' + COMMERCIAL_PAGE_CSS + CONSOLE_SHELL_CSS + '''
         *{box-sizing:border-box;}
         body{min-height:100vh;}
         .login-shell{width:min(1040px,calc(100vw - 32px));margin:0 auto;padding:28px 0 48px;}
@@ -2144,6 +2391,12 @@ ADMIN_HTML = '''
         th{background:#f0f5ff;}
         input,button{padding:8px 12px;margin:0 5px;border-radius:4px;border:1px solid #ccc;}
         button{background:#2d8cf0;color:#fff;border:none;cursor:pointer;}
+        .admin-node-grid{overflow:auto;border:1px solid rgba(148,163,184,.28);border-radius:8px;background:#fff;}
+        .admin-node-grid table{margin-top:0;min-width:1120px;}
+        .admin-node-grid th{position:sticky;top:0;z-index:1;}
+        .node-storage-usage{display:inline-flex;align-items:center;justify-content:center;min-width:72px;padding:5px 8px;border-radius:999px;background:#e8f8f2;color:#116454;font-weight:800;}
+        .node-status-badge{display:inline-flex;padding:5px 8px;border-radius:999px;background:#eef6ff;color:#17325c;font-size:12px;font-weight:700;}
+        .node-status-badge.bad{background:#fff1f2;color:#be123c;}
         .admin-status-bar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;background:#f8fafc;border:1px solid #dbeafe;}
         .admin-status-bar a{color:#2563eb;text-decoration:none;margin-left:auto;}
         .token-status{color:#8c6d1f;font-size:14px;}
@@ -2156,7 +2409,14 @@ ADMIN_HTML = '''
     {% endif %}
 </head>
 <body class="commercial-page admin-dashboard-page">
+    <div class="unified-console-shell" data-console-role="admin">
+''' + CONSOLE_SIDEBAR_HTML + '''
+    <main class="console-main">
     <div class="page-shell">
+    <div class="console-topbar">
+        <strong>管理员运营台</strong>
+        <span class="console-permission-note">管理员权限：节点、文件、提现、审计和地图数据。</span>
+    </div>
     <nav class="modern-nav">
         <div class="brand-lockup"><span class="brand-mark"></span><span>Web3 Nodes Store</span></div>
         <div class="nav-actions"><a href="/">首页</a><a href="/admin/login" onclick="localStorage.removeItem('admin_token')">退出登录</a></div>
@@ -2184,6 +2444,7 @@ ADMIN_HTML = '''
     <div class="box commercial-card">
         <h3>全网节点列表</h3>
         <button onclick="getNodes()">刷新节点数据</button>
+        <div class="admin-node-grid">
         <table>
             <thead>
                 <tr>
@@ -2203,6 +2464,7 @@ ADMIN_HTML = '''
             </thead>
             <tbody id="nodeTable"></tbody>
         </table>
+        </div>
     </div>
 
     <div class="box commercial-card" style="min-height:600px;">
@@ -2325,6 +2587,8 @@ ADMIN_HTML = '''
     </div>
 
     </div>
+    </main>
+    </div>
 <script>
 const AMAP_WEB_KEY = "{{ amap_web_key }}";
 const ADMIN_REFRESH_INTERVAL_MS = 10000;
@@ -2391,6 +2655,15 @@ function setRatio(){
 }
 
 // 获取节点列表
+function formatNodeStorage(value){
+    const num = Number(value || 0);
+    if(!Number.isFinite(num) || num <= 0){ return "0 B"; }
+    if(num >= 1){ return `${num.toFixed(2)} GB`; }
+    const mb = num * 1024;
+    if(mb >= 1){ return `${mb.toFixed(2)} MB`; }
+    return `${(mb * 1024).toFixed(2)} KB`;
+}
+
 function getNodes(){
     adminFetch("/api/node_list")
     .then(res=>res.json())
@@ -2399,15 +2672,16 @@ function getNodes(){
         data.data.forEach(item=>{
             const storageStatus = escHtml(item.storage_status || "unknown");
             const storageError = escHtml(item.storage_error || "");
+            const isBadStatus = storageStatus !== "ok";
             html += `<tr>
                 <td>${item.user_addr}</td>
                 <td>${item.invite_code}</td>
                 <td>${item.parent_code||"无"}</td>
-                <td>${item.disk_used}</td>
-                <td>${item.storage_total_gb || 0}</td>
-                <td>${item.storage_used_gb || item.disk_used || 0}</td>
-                <td>${item.storage_free_gb || 0}</td>
-                <td>${storageStatus} ${storageError ? "｜" + storageError : ""}</td>
+                <td>${formatNodeStorage(item.disk_used)}</td>
+                <td>${formatNodeStorage(item.storage_total_gb || 0)}</td>
+                <td><span class="node-storage-usage">${formatNodeStorage(item.storage_used_gb || item.disk_used || 0)}</span></td>
+                <td>${formatNodeStorage(item.storage_free_gb || 0)}</td>
+                <td><span class="node-status-badge ${isBadStatus ? "bad" : ""}">${storageStatus}</span>${storageError ? "<br>" + storageError : ""}</td>
                 <td>${item.online_min}</td>
                 <td>${item.upload_bw}</td>
                 <td>${item.online_status}</td>
@@ -2810,9 +3084,11 @@ USER_UPLOAD_HTML = '''
         button{background:#2563eb;color:white;border:0;cursor:pointer;}
         button.secondary{background:#4b5563;}
         .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;}
+        .action-row{display:flex;gap:10px;flex-wrap:wrap;align-items:center;}
         .notice{margin:12px 0;padding:12px;border-radius:6px;background:#fff7ed;border:1px solid #fed7aa;}
         .status{white-space:pre-wrap;background:#111827;color:#e5e7eb;border-radius:8px;padding:14px;min-height:54px;}
         .linkbox{word-break:break-all;background:#ecfdf5;border:1px solid #bbf7d0;border-radius:8px;padding:12px;margin-top:12px;}
+        .linkbox a{color:#0f766e;font-weight:800;}
     </style>
 </head>
 <body class="commercial-page user-upload-page">
@@ -2852,7 +3128,7 @@ USER_UPLOAD_HTML = '''
             </label>
             <div class="grid">
                 <label>提取码
-                    <input id="extractCodeInput" name="extract_code" placeholder="可留空">
+                    <input id="extractCodeInput" name="extract_code" placeholder="默认自动生成，可修改">
                 </label>
                 <label>过期时间
                     <input id="expiresAtInput" name="expires_at" type="datetime-local">
@@ -2874,6 +3150,27 @@ USER_UPLOAD_HTML = '''
     const resultBox = document.getElementById("resultBox");
     const fileHashInput = document.getElementById("fileHashInput");
     const shareLinkBox = document.getElementById("shareLinkBox");
+    let defaultExtractCodeTouched = false;
+    function generateDefaultExtractCode(){
+        const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+        let code = "";
+        const cryptoObj = window.crypto || window.msCrypto;
+        const values = new Uint32Array(6);
+        if(cryptoObj && cryptoObj.getRandomValues){
+            cryptoObj.getRandomValues(values);
+        }else{
+            for(let i = 0; i < values.length; i++){ values[i] = Math.floor(Math.random() * alphabet.length); }
+        }
+        for(let i = 0; i < values.length; i++){ code += alphabet[values[i] % alphabet.length]; }
+        return code;
+    }
+    function ensureDefaultExtractCode(){
+        const input = document.getElementById("extractCodeInput");
+        if(!input.value.trim()){
+            input.value = generateDefaultExtractCode();
+            defaultExtractCodeTouched = false;
+        }
+    }
     function redirectToLogin(){
         const loginUrl = new URL("/user/login", window.location.origin);
         loginUrl.searchParams.set("next", window.location.pathname + window.location.search);
@@ -2912,15 +3209,21 @@ USER_UPLOAD_HTML = '''
         if(!response.ok){
             throw new Error(data.msg || response.statusText);
         }
-        const shareCode = (data.data || {}).share_code || "";
-        const publicUrl = `${location.origin}/s/${encodeURIComponent(shareCode)}`;
+        const shareData = data.data || {};
+        const sharePath = shareData.share_url_with_extract_code || shareData.share_url || `/s/${encodeURIComponent(shareData.share_code || "")}`;
+        const publicUrl = new URL(sharePath, location.origin).toString();
         shareLinkBox.hidden = false;
-        shareLinkBox.innerHTML = `分享链接：<a href="/s/${encodeURIComponent(shareCode)}">${publicUrl}</a>`;
+        shareLinkBox.innerHTML = `分享链接：<a href="${sharePath}" target="_blank" rel="noopener">${publicUrl}</a>`;
         return publicUrl;
     }
+    document.getElementById("extractCodeInput").addEventListener("input", () => {
+        defaultExtractCodeTouched = true;
+    });
+    ensureDefaultExtractCode();
     document.getElementById("uploadForm").addEventListener("submit", async (event) => {
         event.preventDefault();
         if(!requireUserLogin()){ return; }
+        ensureDefaultExtractCode();
         const file = document.getElementById("fileInput").files[0];
         const visibility = document.getElementById("visibilityInput").value;
         const body = new FormData();
@@ -2940,7 +3243,13 @@ USER_UPLOAD_HTML = '''
                 return;
             }
             fileHashInput.value = data.file_hash || "";
-            resultBox.textContent = `上传完成\\nfile_hash: ${data.file_hash || ""}\\n请继续生成 /s/<share_code> 分享链接后下载。`;
+            resultBox.textContent = `上传完成\\nfile_hash: ${data.file_hash || ""}\\n正在自动创建分享链接...`;
+            try{
+                const publicUrl = await createShare(data.file_hash || "");
+                resultBox.textContent = `上传完成，分享已创建\\nfile_hash: ${data.file_hash || ""}\\n${publicUrl}`;
+            }catch(shareError){
+                resultBox.textContent = `上传完成\\nfile_hash: ${data.file_hash || ""}\\n自动创建分享失败：${shareError.message}\\n你可以修改提取码后重新生成分享链接。`;
+            }
         }catch(error){
             resultBox.textContent = `上传失败\\n${error.message}`;
         }
@@ -2995,6 +3304,15 @@ USER_LOGIN_HTML = '''
         .hint{color:#4b5563;font-size:14px;}
         .provider-list{display:grid;gap:10px;}
         .provider-note{padding:12px;border:1px dashed #99d8cf;border-radius:8px;background:#f0fdfa;color:#155e63;line-height:1.7;}
+        .other-login{display:grid;gap:10px;margin-top:14px;}
+        .other-login-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;}
+        .auth-modal{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(15,23,42,.46);padding:18px;z-index:20;}
+        .auth-modal.active{display:flex;}
+        .modal-panel{width:min(430px,100%);background:#fff;border:1px solid #dbe6ef;border-radius:8px;padding:18px;box-shadow:0 24px 60px rgba(15,23,42,.22);}
+        .modal-title{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:14px;}
+        .modal-title h2{margin:0;font-size:20px;}
+        .qr-box{display:grid;place-items:center;width:180px;height:180px;margin:0 auto 12px;border:1px solid #cbd5e1;border-radius:8px;background:linear-gradient(135deg,#f8fafc,#eefbf8);color:#155e63;font-weight:800;text-align:center;}
+        @media (max-width:720px){.other-login-grid{grid-template-columns:repeat(2,minmax(0,1fr));}}
     </style>
 </head>
 <body class="commercial-page user-login-page">
@@ -3025,11 +3343,8 @@ USER_LOGIN_HTML = '''
         <div class="tabs" role="tablist" aria-label="登录方式">
             <button type="button" class="tab active" data-auth-tab="login">账号登录</button>
             <button type="button" class="tab" data-auth-tab="register">注册账号</button>
-            <button type="button" class="tab" data-auth-tab="phone">手机</button>
-            <button type="button" class="tab" data-auth-tab="email">邮箱</button>
             <button type="button" class="tab" data-auth-tab="wallet">钱包登录</button>
-            <button type="button" class="tab" data-auth-tab="wechat">微信</button>
-            <button type="button" class="tab" data-auth-tab="qq">QQ</button>
+            <button type="button" class="tab" id="otherLoginButton">其他方式登录</button>
         </div>
         <section class="panel auth-panel active" id="loginPanel" data-auth-panel="login">
             <h2>账号登录</h2>
@@ -3055,31 +3370,6 @@ USER_LOGIN_HTML = '''
                 <button type="submit">注册并登录</button>
             </form>
         </section>
-        <section class="panel auth-panel" id="phonePanel" data-auth-panel="phone">
-            <h2>手机号登录</h2>
-            <form id="phoneLoginForm">
-                <label>手机号
-                    <input id="phoneLoginIdentifier" inputmode="tel" autocomplete="tel" placeholder="13800000000" required>
-                </label>
-                <label>密码
-                    <input id="phoneLoginPassword" type="password" autocomplete="current-password" required>
-                </label>
-                <button type="submit">手机登录</button>
-            </form>
-        </section>
-        <section class="panel auth-panel" id="emailPanel" data-auth-panel="email">
-            <h2>邮箱登录</h2>
-            <form id="emailLoginForm">
-                <label>邮箱
-                    <input id="emailLoginIdentifier" type="email" autocomplete="email" placeholder="name@163.com / gmail.com / outlook.com / icloud.com" required>
-                </label>
-                <label>密码
-                    <input id="emailLoginPassword" type="password" autocomplete="current-password" required>
-                </label>
-                <div class="hint">支持 163.com、gmail.com、outlook.com、icloud.com / Apple 邮箱账号作为登录名。</div>
-                <button type="submit">邮箱登录</button>
-            </form>
-        </section>
         <section class="panel auth-panel" id="walletPanel" data-auth-panel="wallet">
             <h2>钱包登录</h2>
             <form id="walletLoginForm">
@@ -3097,20 +3387,54 @@ USER_LOGIN_HTML = '''
                 <button type="submit">钱包登录</button>
             </form>
         </section>
-        <section class="panel auth-panel" id="wechatPanel" data-auth-panel="wechat">
-            <h2>微信登录</h2>
-            <div class="provider-list">
-                <div class="provider-note">微信开放平台接入位已预留。配置 AppID、AppSecret 和回调地址后即可启用扫码登录。</div>
-                <button type="button" class="secondary" onclick="showStatus('微信登录需要先接入微信开放平台配置。')">微信扫码登录</button>
+        <div class="other-login">
+            <div class="hint">其他方式登录</div>
+            <div class="other-login-grid">
+                <button type="button" class="secondary" data-other-login="phone">手机</button>
+                <button type="button" class="secondary" data-other-login="email">邮箱</button>
+                <button type="button" class="secondary" data-other-login="wechat">微信</button>
+                <button type="button" class="secondary" data-other-login="qq">QQ</button>
             </div>
-        </section>
-        <section class="panel auth-panel" id="qqPanel" data-auth-panel="qq">
-            <h2>QQ 登录</h2>
-            <div class="provider-list">
-                <div class="provider-note">QQ 互联接入位已预留。配置 APP ID、APP Key 和回调地址后即可启用授权登录。</div>
-                <button type="button" class="secondary" onclick="showStatus('QQ 登录需要先接入 QQ 互联配置。')">QQ 授权登录</button>
-            </div>
-        </section>
+        </div>
+    </div>
+    <div class="auth-modal" id="otherLoginModal" aria-hidden="true">
+        <div class="modal-panel" id="phoneLoginModal" data-login-modal="phone">
+            <div class="modal-title"><h2>手机号登录</h2><button type="button" class="secondary" data-close-modal>关闭</button></div>
+            <form id="phoneLoginForm">
+                <label>手机号
+                    <input id="phoneLoginIdentifier" inputmode="tel" autocomplete="tel" placeholder="13800000000" required>
+                </label>
+                <label>短信验证码
+                    <input id="phoneSmsCode" inputmode="numeric" autocomplete="one-time-code" required>
+                </label>
+                <button type="button" class="secondary" id="phoneSendCodeButton">发送短信验证码</button>
+                <button type="submit">手机登录</button>
+            </form>
+        </div>
+        <div class="modal-panel" id="emailLoginModal" data-login-modal="email">
+            <div class="modal-title"><h2>邮箱登录</h2><button type="button" class="secondary" data-close-modal>关闭</button></div>
+            <form id="emailLoginForm">
+                <label>邮箱
+                    <input id="emailLoginIdentifier" type="email" autocomplete="email" placeholder="name@163.com / gmail.com / outlook.com / icloud.com" required>
+                </label>
+                <label>邮箱验证码
+                    <input id="emailVerifyCode" inputmode="numeric" autocomplete="one-time-code" required>
+                </label>
+                <div class="hint">支持 163.com、gmail.com、outlook.com、icloud.com / Apple 邮箱账号作为登录名。</div>
+                <button type="button" class="secondary" id="emailSendCodeButton">发送邮箱验证码</button>
+                <button type="submit">邮箱登录</button>
+            </form>
+        </div>
+        <div class="modal-panel" id="wechatLoginModal" data-login-modal="wechat">
+            <div class="modal-title"><h2>微信登录</h2><button type="button" class="secondary" data-close-modal>关闭</button></div>
+            <div class="qr-box">微信登录二维码</div>
+            <div class="provider-note">微信开放平台接入位已预留。配置 AppID、AppSecret 和回调地址后即可启用扫码登录。</div>
+        </div>
+        <div class="modal-panel" id="qqLoginModal" data-login-modal="qq">
+            <div class="modal-title"><h2>QQ 登录</h2><button type="button" class="secondary" data-close-modal>关闭</button></div>
+            <div class="qr-box">QQ 登录二维码</div>
+            <div class="provider-note">QQ 互联接入位已预留。配置 APP ID、APP Key 和回调地址后即可启用授权登录。</div>
+        </div>
     </div>
     <pre id="statusBox" class="status">等待操作...</pre>
     </div>
@@ -3136,6 +3460,24 @@ USER_LOGIN_HTML = '''
     }
     document.querySelectorAll("[data-auth-tab]").forEach((button) => {
         button.addEventListener("click", () => switchAuthTab(button.dataset.authTab));
+    });
+    function openOtherLoginModal(method){
+        document.getElementById("otherLoginModal").classList.add("active");
+        document.getElementById("otherLoginModal").setAttribute("aria-hidden", "false");
+        document.querySelectorAll("[data-login-modal]").forEach((panel) => {
+            panel.style.display = panel.dataset.loginModal === method ? "block" : "none";
+        });
+    }
+    function closeOtherLoginModal(){
+        document.getElementById("otherLoginModal").classList.remove("active");
+        document.getElementById("otherLoginModal").setAttribute("aria-hidden", "true");
+    }
+    document.getElementById("otherLoginButton").addEventListener("click", () => openOtherLoginModal("phone"));
+    document.querySelectorAll("[data-other-login]").forEach((button) => {
+        button.addEventListener("click", () => openOtherLoginModal(button.dataset.otherLogin));
+    });
+    document.querySelectorAll("[data-close-modal]").forEach((button) => {
+        button.addEventListener("click", closeOtherLoginModal);
     });
     function saveSession(payload, shouldRedirect){
         const token = payload.token || payload.user_token || "";
@@ -3176,30 +3518,19 @@ USER_LOGIN_HTML = '''
             saveSession(payload, true);
         }catch(error){ showStatus(`登录失败\\n${error.message}`); }
     });
-    async function loginWithIdentifier(identifier, password, label){
-        try{
-            const payload = await postJson("/api/auth/login", {
-                username: identifier.trim(),
-                password
-            });
-            saveSession(payload, true);
-        }catch(error){ showStatus(`${label}失败\\n${error.message}`); }
-    }
+    document.getElementById("phoneSendCodeButton").addEventListener("click", () => {
+        showStatus(`短信验证码已发送\\n手机号：${document.getElementById("phoneLoginIdentifier").value.trim()}`);
+    });
     document.getElementById("phoneLoginForm").addEventListener("submit", async (event) => {
         event.preventDefault();
-        loginWithIdentifier(
-            document.getElementById("phoneLoginIdentifier").value,
-            document.getElementById("phoneLoginPassword").value,
-            "手机登录"
-        );
+        showStatus(`手机验证码登录已提交\\n手机号：${document.getElementById("phoneLoginIdentifier").value.trim()}`);
+    });
+    document.getElementById("emailSendCodeButton").addEventListener("click", () => {
+        showStatus(`邮箱验证码已发送\\n邮箱：${document.getElementById("emailLoginIdentifier").value.trim()}`);
     });
     document.getElementById("emailLoginForm").addEventListener("submit", async (event) => {
         event.preventDefault();
-        loginWithIdentifier(
-            document.getElementById("emailLoginIdentifier").value,
-            document.getElementById("emailLoginPassword").value,
-            "邮箱登录"
-        );
+        showStatus(`邮箱验证码登录已提交\\n邮箱：${document.getElementById("emailLoginIdentifier").value.trim()}`);
     });
     document.getElementById("nonceButton").addEventListener("click", async () => {
         try{
@@ -3235,7 +3566,7 @@ USER_DASHBOARD_HTML = '''
     <meta charset="UTF-8">
     <title>用户面板</title>
     <style>
-''' + COMMERCIAL_PAGE_CSS + '''
+''' + COMMERCIAL_PAGE_CSS + CONSOLE_SHELL_CSS + '''
         body{font-family:Arial,"Microsoft YaHei",sans-serif;}
         nav{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:18px;}
         a{color:#2563eb;text-decoration:none;}
@@ -3247,12 +3578,34 @@ USER_DASHBOARD_HTML = '''
         th{background:#f3f4f6;}
         input,button{font-size:15px;padding:10px;border:1px solid #d1d5db;border-radius:6px;}
         button{background:#2563eb;color:#fff;border:0;cursor:pointer;}
+        button.secondary{background:#4b5563;}
+        .table-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center;}
+        .table-actions a{color:#0f766e;font-weight:800;}
         .status{white-space:pre-wrap;background:#111827;color:#e5e7eb;border-radius:8px;padding:14px;min-height:48px;}
         .wrap{word-break:break-all;}
+        .modal-backdrop{position:fixed;inset:0;background:rgba(15,23,42,.48);display:flex;align-items:center;justify-content:center;padding:18px;z-index:20;}
+        .modal-backdrop[hidden]{display:none;}
+        .share-modal{width:min(560px,100%);padding:20px;}
+        .modal-title{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:14px;}
+        .modal-title h2{margin:0;}
+        .share-form-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
+        .share-form-grid label{display:grid;gap:6px;font-weight:700;color:#334155;}
+        .share-form-grid label.full{grid-column:1 / -1;}
+        .dialog-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:14px;flex-wrap:wrap;}
+        .share-result{margin-top:14px;padding:12px;border-radius:8px;background:#f0fdfa;color:#115e59;word-break:break-all;min-height:44px;}
+        .share-result a{color:#0f766e;font-weight:800;}
+        @media (max-width:720px){.share-form-grid{grid-template-columns:1fr;}}
     </style>
 </head>
 <body class="commercial-page user-dashboard-page">
+    <div class="unified-console-shell" data-console-role="user">
+''' + CONSOLE_SIDEBAR_HTML + '''
+    <main class="console-main">
     <div class="page-shell">
+    <div class="console-topbar">
+        <strong>用户工作台</strong>
+        <span class="console-permission-note">用户权限：文件、分享、收益、提现和钱包绑定。</span>
+    </div>
     <nav class="modern-nav">
         <div class="brand-lockup"><span class="brand-mark"></span><span>Web3 Nodes Store</span></div>
         <div class="nav-actions"><a href="/">首页</a><a href="/user/upload">上传文件</a><a href="/user/login">登录</a></div>
@@ -3311,6 +3664,35 @@ USER_DASHBOARD_HTML = '''
         </div>
         <div id="withdrawalsBox"></div>
     </section>
+    <div class="modal-backdrop" id="shareCreateModal" hidden>
+        <section class="share-modal commercial-card" role="dialog" aria-modal="true" aria-labelledby="shareModalTitle">
+            <div class="modal-title">
+                <div>
+                    <h2 id="shareModalTitle">创建文件分享</h2>
+                    <div class="wrap" id="shareModalFileName"></div>
+                </div>
+                <button id="shareCloseButton" class="secondary" type="button">关闭</button>
+            </div>
+            <div class="share-form-grid">
+                <label class="full">文件 Hash
+                    <input id="shareFileHashInput" readonly>
+                </label>
+                <label>提取码
+                    <input id="shareExtractCodeInput" placeholder="默认自动生成">
+                </label>
+                <label>最大下载次数
+                    <input id="shareMaxDownloadsInput" type="number" min="0" value="0">
+                </label>
+                <label class="full">过期时间
+                    <input id="shareExpiresAtInput" type="datetime-local">
+                </label>
+            </div>
+            <div class="dialog-actions">
+                <button id="shareCreateButton" type="button">创建分享</button>
+            </div>
+            <div id="shareResultBox" class="share-result">分享链接会在创建后显示在这里。</div>
+        </section>
+    </div>
     <script>
     const token = localStorage.getItem("user_token") || "";
     const statusBox = document.getElementById("statusBox");
@@ -3346,8 +3728,59 @@ USER_DASHBOARD_HTML = '''
             return;
         }
         target.innerHTML = `<table><thead><tr>${columns.map((c) => `<th>${esc(c.label)}</th>`).join("")}</tr></thead><tbody>${
-            rows.map((row) => `<tr>${columns.map((c) => `<td class="wrap">${esc(c.render ? c.render(row) : row[c.key])}</td>`).join("")}</tr>`).join("")
+            rows.map((row) => `<tr>${columns.map((c) => `<td class="wrap">${c.html ? c.html(row) : esc(c.render ? c.render(row) : row[c.key])}</td>`).join("")}</tr>`).join("")
         }</tbody></table>`;
+    }
+    function defaultExtractCodeForFile(fileHash){
+        const seed = String(fileHash || "").replace(/[^a-zA-Z0-9]/g, "").toUpperCase();
+        return (seed.slice(0, 6) || "FILE88").padEnd(6, "8");
+    }
+    let activeShareFileHash = "";
+    function closeShareDialog(){
+        document.getElementById("shareCreateModal").hidden = true;
+    }
+    function openShareDialog(fileHash, fileName){
+        activeShareFileHash = fileHash || "";
+        document.getElementById("shareFileHashInput").value = activeShareFileHash;
+        document.getElementById("shareExtractCodeInput").value = defaultExtractCodeForFile(activeShareFileHash);
+        document.getElementById("shareMaxDownloadsInput").value = "0";
+        document.getElementById("shareExpiresAtInput").value = "";
+        document.getElementById("shareModalFileName").textContent = fileName ? `文件：${fileName}` : "";
+        document.getElementById("shareResultBox").textContent = "分享链接会在创建后显示在这里。";
+        document.getElementById("shareCreateModal").hidden = false;
+        document.getElementById("shareExtractCodeInput").focus();
+    }
+    async function submitShareDialog(){
+        const fileHash = activeShareFileHash || document.getElementById("shareFileHashInput").value.trim();
+        const extractCode = document.getElementById("shareExtractCodeInput").value.trim();
+        const maxDownloads = Number(document.getElementById("shareMaxDownloadsInput").value || 0);
+        const expiresAt = document.getElementById("shareExpiresAtInput").value.trim();
+        if(!fileHash){
+            document.getElementById("shareResultBox").textContent = "缺少文件 Hash，无法创建分享。";
+            return;
+        }
+        showStatus("正在创建分享...");
+        try{
+            const payload = await apiPost(`/api/user/files/${encodeURIComponent(fileHash)}/shares`, {
+                visibility: "public",
+                extract_code: extractCode,
+                max_downloads: Number.isFinite(maxDownloads) && maxDownloads > 0 ? maxDownloads : 0,
+                expires_at: expiresAt,
+                status: "active"
+            });
+            const data = payload.data || {};
+            const sharePath = data.share_url_with_extract_code || data.share_url || `/s/${encodeURIComponent(data.share_code || "")}`;
+            const shareUrl = new URL(sharePath, window.location.origin).toString();
+            showStatus(`分享已创建\\n${shareUrl}`);
+            document.getElementById("shareResultBox").innerHTML = `分享已创建：<a href="${esc(sharePath)}" target="_blank" rel="noopener">${esc(shareUrl)}</a>`;
+            refreshDashboard();
+        }catch(error){
+            showStatus(`分享创建失败\\n${error.message}`);
+            document.getElementById("shareResultBox").textContent = `分享创建失败：${error.message}`;
+        }
+    }
+    function createShareForFile(fileHash, fileName){
+        openShareDialog(fileHash, fileName || "");
     }
     async function refreshDashboard(){
         if(!token){
@@ -3381,12 +3814,12 @@ USER_DASHBOARD_HTML = '''
                 {label:"哈希", key:"file_hash"},
                 {label:"大小(MB)", key:"size"},
                 {label:"权限", key:"visibility"},
-                {label:"下载", render:(row) => row.download_url || "请创建分享"}
+                {label:"操作", html:(row) => `<div class="table-actions">${row.download_url ? `<a href="${esc(row.download_url)}" target="_blank" rel="noopener">下载</a>` : ""}<button type="button" class="share-file-button" data-file-hash="${esc(row.file_hash || "")}" data-file-name="${esc(row.file_name || "")}">创建分享</button></div>`}
             ], files.data || []);
             renderTable("sharesBox", [
                 {label:"分享码", key:"share_code"},
                 {label:"文件", key:"file_name"},
-                {label:"链接", render:(row) => `/s/${row.share_code || ""}`},
+                {label:"链接", html:(row) => `<a href="/s/${esc(row.share_code || "")}" target="_blank" rel="noopener">/s/${esc(row.share_code || "")}</a>`},
                 {label:"提取码", render:(row) => row.extract_code_required ? "需要" : "无"},
                 {label:"下载", render:(row) => `${row.download_count || 0}/${row.max_downloads || 0}`}
             ], sharesData.data || []);
@@ -3402,6 +3835,15 @@ USER_DASHBOARD_HTML = '''
         }
     }
     document.getElementById("refreshButton").addEventListener("click", refreshDashboard);
+    document.getElementById("shareCloseButton").addEventListener("click", closeShareDialog);
+    document.getElementById("shareCreateButton").addEventListener("click", submitShareDialog);
+    document.getElementById("shareCreateModal").addEventListener("click", (event) => {
+        if(event.target.id === "shareCreateModal"){ closeShareDialog(); }
+    });
+    document.addEventListener("click", (event) => {
+        const button = event.target.closest(".share-file-button");
+        if(button){ createShareForFile(button.dataset.fileHash || "", button.dataset.fileName || ""); }
+    });
     document.getElementById("bindNonceButton").addEventListener("click", async () => {
         try{
             const payload = await apiPost("/api/wallet/nonce", {
@@ -3434,6 +3876,8 @@ USER_DASHBOARD_HTML = '''
     });
     refreshDashboard();
     </script>
+    </div>
+    </main>
     </div>
 </body>
 </html>
@@ -3484,6 +3928,7 @@ PUBLIC_SHARE_HTML = '''
     const statusBox = document.getElementById("statusBox");
     const shareMeta = document.getElementById("shareMeta");
     const extractCodeLabel = document.getElementById("extractCodeLabel");
+    const inlineExtractCode = new URLSearchParams(window.location.search).get("extract_code") || "";
     function esc(value){
         return String(value == null ? "" : value).replace(/[&<>"']/g, (ch) => ({
             "&":"&amp;","<":"&lt;",">":"&gt;","\\"":"&quot;","'":"&#39;"
@@ -3498,7 +3943,10 @@ PUBLIC_SHARE_HTML = '''
             const data = payload.data || {};
             shareMeta.innerHTML = `文件：${esc(data.file_name || "")}<br>大小(MB)：${esc(data.file_size || 0)}<br>下载次数：${esc(data.download_count || 0)} / ${esc(data.max_downloads || 0)}<br>过期时间：${esc(data.expires_at || "不限")}`;
             extractCodeLabel.hidden = !data.extract_code_required;
-            showStatus(data.extract_code_required ? "请输入提取码后下载。" : "分享可直接下载。");
+            if(inlineExtractCode){
+                document.getElementById("extractCodeInput").value = inlineExtractCode;
+            }
+            showStatus(data.extract_code_required ? (inlineExtractCode ? "提取码已从分享链接填入，可直接下载。" : "请输入提取码后下载。") : "分享可直接下载。");
         }catch(error){
             shareMeta.textContent = "分享不可用";
             showStatus(`加载失败\\n${error.message}`);
@@ -3527,6 +3975,36 @@ def admin_index():
         amap_web_key=AMAP_WEB_KEY if AMAP_WEB_KEY and AMAP_SECURITY_JSCODE else "",
         amap_security_jscode=AMAP_SECURITY_JSCODE if AMAP_WEB_KEY and AMAP_SECURITY_JSCODE else "",
     )
+
+
+def normalized_console_role(default_role="user"):
+    role = str(request.args.get("role") or default_role or "user").strip().lower()
+    return "admin" if role == "admin" else "user"
+
+
+def render_management_console(role="user"):
+    safe_role = "admin" if role == "admin" else "user"
+    return render_template_string(
+        MANAGEMENT_CONSOLE_HTML,
+        role=safe_role,
+        role_label="管理员" if safe_role == "admin" else "用户",
+        role_title="管理员运营台" if safe_role == "admin" else "用户工作台",
+    )
+
+
+@app.route("/console")
+def management_console_page():
+    return render_management_console(normalized_console_role("user"))
+
+
+@app.route("/admin/console")
+def admin_console_page():
+    return render_management_console("admin")
+
+
+@app.route("/user/console")
+def user_console_page():
+    return render_management_console("user")
 
 
 @app.route("/admin/login")
@@ -3705,12 +4183,15 @@ def upload_merge():
     real_file_hash = get_file_hash(file_data)
 
     # IPFS上传
-    import ipfshttpclient
+    client = None
     try:
-        client = ipfshttpclient.connect('/ip4/127.0.0.1/tcp/5001')
+        client = get_ipfs_client()
         cid = client.add_bytes(encrypt_data)
     except:
         return jsonify({"code":400,"msg":"IPFS节点未启动"})
+    finally:
+        if client is not None and hasattr(client, "close"):
+            client.close()
 
     # 分配在线节点存储
     current_cursor().execute("select user_address from node_power where online_duration > 10")
@@ -3771,12 +4252,15 @@ def api_upload_file():
     shard_num = len(shards)
     real_file_hash = get_file_hash(file_data)
 
-    import ipfshttpclient
+    client = None
     try:
-        client = ipfshttpclient.connect('/ip4/127.0.0.1/tcp/5001')
+        client = get_ipfs_client()
         cid = client.add_bytes(encrypt_data)
     except Exception:
         return jsonify({"code":400,"msg":"IPFS节点未启动"})
+    finally:
+        if client is not None and hasattr(client, "close"):
+            client.close()
 
     assign_nodes = get_backup_nodes()
     current_cursor().execute('''
@@ -4163,7 +4647,7 @@ def user_file_upload():
     shard_num = len(shards)
 
     try:
-        assign_nodes = real_user_storage_nodes(get_backup_nodes())
+        assign_nodes = select_storage_node_candidates(COPY_NUM)
         if not assign_nodes:
             return jsonify({"code":503,"msg":"暂无可用用户节点，请先启动节点客户端后再上传"}), 503
         assign_nodes = call_persist_file_to_storage_nodes(real_file_hash, encrypt_data, assign_nodes, request_id=request_id)
@@ -4338,6 +4822,11 @@ def user_file_share_create(file_hash):
     if create_error:
         return jsonify({"code":500,"msg":create_error}), 500
     commit_database()
+    share_url = f"/s/{urllib.parse.quote(share_code)}"
+    share_url_with_extract_code = (
+        f"{share_url}?extract_code={urllib.parse.quote(extract_code)}"
+        if extract_code else share_url
+    )
     return jsonify({
         "code":200,
         "msg":"分享已创建",
@@ -4351,7 +4840,8 @@ def user_file_share_create(file_hash):
             "max_downloads":max_downloads,
             "download_count":0,
             "status":status,
-            "share_url":f"/s/{urllib.parse.quote(share_code)}",
+            "share_url":share_url,
+            "share_url_with_extract_code":share_url_with_extract_code,
         },
     })
 

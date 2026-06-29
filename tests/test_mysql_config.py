@@ -37,6 +37,7 @@ ENV_KEYS = (
     "AMAP_WEB_KEY",
     "AMAP_SECURITY_JSCODE",
     "NODE_OPEN_MAP_WINDOW",
+    "NODE_OPEN_CLIENT_CONSOLE",
 )
 
 
@@ -1037,7 +1038,17 @@ class MysqlConfigTest(unittest.TestCase):
         mysql_migrations = "\n".join(mysql_server.database_module.SCHEMA_MIGRATIONS)
         postgres_migrations = "\n".join(postgres_server.database_module.POSTGRES_SCHEMA_MIGRATIONS)
 
-        for column in ("storage_path", "storage_status", "storage_error", "storage_total_gb", "storage_used_gb", "storage_free_gb"):
+        for column in (
+            "storage_path",
+            "storage_status",
+            "storage_error",
+            "storage_total_gb",
+            "storage_used_gb",
+            "storage_free_gb",
+            "storage_quota_gb",
+            "storage_available_gb",
+            "storage_api_url",
+        ):
             self.assertIn(column, mysql_sql)
             self.assertIn(column, postgres_sql)
             self.assertIn(column, mysql_migrations)
@@ -1320,6 +1331,40 @@ class MysqlConfigTest(unittest.TestCase):
         body = response.get_data(as_text=True)
         self.assertIn('id="nodeTable"', body)
         self.assertIn("/admin/login", body)
+        self.assertIn("admin-node-grid", body)
+        self.assertIn("formatNodeStorage", body)
+        self.assertIn("node-storage-usage", body)
+        for marker in (
+            "unified-console-shell",
+            "console-sidebar",
+            'data-console-role="admin"',
+            'data-permission="admin"',
+            'data-permission="user"',
+            "管理员",
+            "用户工作台",
+        ):
+            self.assertIn(marker, body)
+
+    def test_unified_console_routes_render_role_based_management_shells(self):
+        server_main = load_server_main(ADMIN_API_TOKEN="secret-token", SESSION_SECRET="session-secret")
+        server_main.init_db = lambda: self.fail("console shell should not require database")
+        client = server_main.app.test_client()
+
+        admin_response = client.get("/console?role=admin")
+        user_response = client.get("/console?role=user")
+
+        self.assertEqual(admin_response.status_code, 200)
+        self.assertEqual(user_response.status_code, 200)
+        admin_body = admin_response.get_data(as_text=True)
+        user_body = user_response.get_data(as_text=True)
+        self.assertIn('data-console-role="admin"', admin_body)
+        self.assertIn('data-console-role="user"', user_body)
+        self.assertIn("unified-console-shell", admin_body)
+        self.assertIn("unified-console-shell", user_body)
+        self.assertIn("requireAdminLogin", admin_body)
+        self.assertIn("requireUserLogin", user_body)
+        self.assertIn("/api/node_list", admin_body)
+        self.assertIn("/api/user/files", user_body)
 
     def test_admin_login_api_validates_token_without_admin_header(self):
         server_main = load_server_main(ADMIN_API_TOKEN="secret-token")
@@ -1916,7 +1961,21 @@ class MysqlConfigTest(unittest.TestCase):
             sys.modules.pop("client", None)
             client_module = importlib.import_module("client")
             html = client_module.CLIENT_MANAGE_HTML
-            for marker in ("节点控制台", "总容量", "提交提现", "添加目录", "停止节点", "重启节点"):
+            for marker in (
+                "节点控制台",
+                "总容量",
+                "提交提现",
+                "添加目录",
+                "停止节点",
+                "重启节点",
+                "本机已存文件",
+                "localShardList",
+                "node-console-shell",
+                "node-hero-grid",
+                "node-kpi-board",
+                "localShardUsage",
+                "formatStorageDisplay",
+            ):
                 self.assertIn(marker, html)
         finally:
             sys.modules.pop("client", None)
@@ -2115,7 +2174,7 @@ class MysqlConfigTest(unittest.TestCase):
             sys.modules["webview"] = None
             sys.modules.pop("client", None)
             client_module = importlib.import_module("client")
-            state = client_module.create_client_state("http://server", "NODE_A", "MAC_A", "D:/node", 8787)
+            state = client_module.create_client_state("http://server", "NODE_A", "MAC_A", "D:/node", 8787, 100)
             server = client_module.ThreadingHTTPServer(
                 ("127.0.0.1", 0),
                 client_module.make_manage_handler(state),
@@ -2169,7 +2228,7 @@ class MysqlConfigTest(unittest.TestCase):
             sys.modules["webview"] = None
             sys.modules.pop("client", None)
             client_module = importlib.import_module("client")
-            state = client_module.create_client_state("http://server", "NODE_A", "MAC_A", "D:/node", 8787)
+            state = client_module.create_client_state("http://server", "NODE_A", "MAC_A", "D:/node", 8787, 100)
             state["storage"] = {"storage_status":"ok","storage_total_gb":100,"storage_used_gb":20,"storage_free_gb":80}
             payload = client_module.client_status_payload(state)
             self.assertEqual(payload["storage"]["storage_free_gb"], 80)
@@ -2207,6 +2266,8 @@ class MysqlConfigTest(unittest.TestCase):
             state = client_module.create_client_state("http://server", "NODE_A", "MAC_A", "D:/old", 8787)
             inspected.clear()
             state["storage_dir"] = "D:/new"
+            state["storage_dirs"] = [{"storage_dir": "D:/new", "storage_quota_gb": 200.0}]
+            state["storage_quota_gb"] = 200
 
             payload = client_module.build_heartbeat_payload(state, 1.5)
 
@@ -2375,6 +2436,74 @@ class MysqlConfigTest(unittest.TestCase):
                         read_payload = json.loads(response.read().decode("utf-8"))
                     self.assertEqual(base64.b64decode(read_payload["data"]["chunk_b64"]), chunk)
                     self.assertEqual(read_payload["data"]["chunk_hash"], chunk_hash)
+
+                    with urllib.request.urlopen(f"{base_url}/api/status", timeout=5) as response:
+                        status_payload = json.loads(response.read().decode("utf-8"))
+                    local_files = status_payload["data"]["stored_files"]
+                    self.assertEqual(local_files[0]["file_hash"], file_hash)
+                    self.assertEqual(local_files[0]["chunk_count"], 1)
+                    self.assertEqual(local_files[0]["chunk_total"], 1)
+                finally:
+                    server.shutdown()
+                    server.server_close()
+                    thread.join(timeout=5)
+        finally:
+            sys.modules.pop("client", None)
+            if old_requests is None:
+                sys.modules.pop("requests", None)
+            else:
+                sys.modules["requests"] = old_requests
+            if old_webview is None:
+                sys.modules.pop("webview", None)
+            else:
+                sys.modules["webview"] = old_webview
+
+    def test_client_storage_shard_write_allows_server_dispatch_without_csrf(self):
+        old_requests = sys.modules.get("requests")
+        old_webview = sys.modules.get("webview")
+        try:
+            sys.modules["requests"] = types.SimpleNamespace(post=lambda *args, **kwargs: None, get=lambda *args, **kwargs: None)
+            sys.modules["webview"] = None
+            sys.modules.pop("client", None)
+            client_module = importlib.import_module("client")
+            file_hash = "c" * 64
+            chunk = b"server-dispatched-shard"
+            chunk_hash = client_module.hashlib.sha256(chunk).hexdigest()
+            with tempfile.TemporaryDirectory() as tmp:
+                state = client_module.create_client_state(
+                    "http://server",
+                    "NODE_A",
+                    "MAC_A",
+                    tmp,
+                    8787,
+                    10,
+                    True,
+                )
+                server = client_module.ThreadingHTTPServer(
+                    ("127.0.0.1", 0),
+                    client_module.make_manage_handler(state),
+                )
+                thread = client_module.threading.Thread(target=server.serve_forever, daemon=True)
+                thread.start()
+                try:
+                    request = urllib.request.Request(
+                        f"http://127.0.0.1:{server.server_port}/api/node/storage/shards",
+                        data=json.dumps({
+                            "file_hash": file_hash,
+                            "chunk_index": 0,
+                            "chunk_total": 1,
+                            "chunk_b64": base64.b64encode(chunk).decode("ascii"),
+                            "chunk_hash": chunk_hash,
+                        }).encode("utf-8"),
+                        headers={"Content-Type": "application/json"},
+                        method="POST",
+                    )
+                    with urllib.request.urlopen(request, timeout=5) as response:
+                        payload = json.loads(response.read().decode("utf-8"))
+
+                    self.assertEqual(response.status, 200)
+                    self.assertTrue(payload["ok"])
+                    self.assertEqual(client_module.read_local_shard(tmp, file_hash, 0), chunk)
                 finally:
                     server.shutdown()
                     server.server_close()
@@ -2412,7 +2541,7 @@ class MysqlConfigTest(unittest.TestCase):
                 }
 
             client_module.inspect_storage_dir = fake_inspect
-            state = client_module.create_client_state("http://server", "NODE_A", "MAC_A", "D:/node", 8787)
+            state = client_module.create_client_state("http://server", "NODE_A", "MAC_A", "D:/node", 8787, 100)
             server = client_module.ThreadingHTTPServer(
                 ("127.0.0.1", 0),
                 client_module.make_manage_handler(state),
@@ -2425,6 +2554,8 @@ class MysqlConfigTest(unittest.TestCase):
                     html = response.read().decode("utf-8")
                 self.assertIn("节点控制台", html)
                 self.assertIn(state["csrf_token"], html)
+                self.assertIn('id="storageQuotaInput"', html)
+                self.assertIn('id="storageDirectoryList"', html)
 
                 with urllib.request.urlopen(f"{base_url}/api/status?x=1", timeout=5) as response:
                     status_payload = json.loads(response.read().decode("utf-8"))
@@ -2435,17 +2566,39 @@ class MysqlConfigTest(unittest.TestCase):
                 self.assertEqual(status_payload["data"]["storage"]["storage_total_gb"], 100)
                 self.assertEqual(status_payload["data"]["storage"]["storage_free_gb"], 80)
 
-                storage_request = urllib.request.Request(
+                missing_quota_request = urllib.request.Request(
                     f"{base_url}/api/storage",
                     data=json.dumps({"storage_dir": "D:/new"}).encode("utf-8"),
                     headers={"Content-Type": "application/json", "X-CSRF-Token": state["csrf_token"]},
                     method="POST",
                 )
+                with self.assertRaises(urllib.error.HTTPError) as missing_quota:
+                    urllib.request.urlopen(missing_quota_request, timeout=5)
+                self.assertEqual(missing_quota.exception.code, 400)
+                missing_quota.exception.read()
+                missing_quota.exception.close()
+                self.assertEqual(state["storage_dir"], "D:/node")
+
+                storage_request = urllib.request.Request(
+                    f"{base_url}/api/storage",
+                    data=json.dumps({"storage_dir": "D:/new", "storage_quota_gb": 64}).encode("utf-8"),
+                    headers={"Content-Type": "application/json", "X-CSRF-Token": state["csrf_token"]},
+                    method="POST",
+                )
                 with urllib.request.urlopen(storage_request, timeout=5) as response:
                     storage_payload = json.loads(response.read().decode("utf-8"))
-                self.assertEqual(state["storage_dir"], "D:/new")
-                self.assertEqual(storage_payload["data"]["storage"]["storage_path"], "D:/new")
-                self.assertEqual(storage_payload["data"]["storage"]["storage_used_gb"], 40)
+                self.assertEqual(state["storage_dir"], "D:/node")
+                self.assertEqual(state["storage_quota_gb"], 164)
+                self.assertEqual(
+                    state["storage_dirs"],
+                    [
+                        {"storage_dir": "D:/node", "storage_quota_gb": 100.0},
+                        {"storage_dir": "D:/new", "storage_quota_gb": 64.0},
+                    ],
+                )
+                self.assertEqual(storage_payload["data"]["storage"]["storage_path"], "D:/node; D:/new")
+                self.assertEqual(storage_payload["data"]["storage"]["storage_total_gb"], 164)
+                self.assertEqual(storage_payload["data"]["storage"]["storage_used_gb"], 60)
 
                 refresh_request = urllib.request.Request(
                     f"{base_url}/api/refresh",
@@ -2455,8 +2608,8 @@ class MysqlConfigTest(unittest.TestCase):
                 )
                 with urllib.request.urlopen(refresh_request, timeout=5) as response:
                     refresh_payload = json.loads(response.read().decode("utf-8"))
-                self.assertEqual(refresh_payload["data"]["storage"]["storage_path"], "D:/new")
-                self.assertEqual(refresh_payload["data"]["storage"]["storage_free_gb"], 60)
+                self.assertEqual(refresh_payload["data"]["storage"]["storage_path"], "D:/node; D:/new")
+                self.assertEqual(refresh_payload["data"]["storage"]["storage_free_gb"], 104)
             finally:
                 server.shutdown()
                 server.server_close()
@@ -2504,7 +2657,7 @@ class MysqlConfigTest(unittest.TestCase):
             try:
                 request = urllib.request.Request(
                     f"http://127.0.0.1:{server.server_port}/api/storage",
-                    data=json.dumps({"storage_dir": "D:/console"}).encode("utf-8"),
+                    data=json.dumps({"storage_dir": "D:/console", "storage_quota_gb": 88}).encode("utf-8"),
                     headers={"Content-Type": "application/json", "X-CSRF-Token": state["csrf_token"]},
                     method="POST",
                 )
@@ -2517,6 +2670,8 @@ class MysqlConfigTest(unittest.TestCase):
                 self.assertEqual(inspected, ["D:/console"])
                 self.assertEqual(heartbeat_payload["storage_path"], "D:/console")
                 self.assertEqual(heartbeat_payload["disk_used"], 55)
+                self.assertEqual(heartbeat_payload["storage_api_url"], "http://127.0.0.1:8787")
+                self.assertEqual(heartbeat_payload["storage_quota_gb"], 88)
             finally:
                 server.shutdown()
                 server.server_close()
@@ -2536,6 +2691,7 @@ class MysqlConfigTest(unittest.TestCase):
         old_requests = sys.modules.get("requests")
         old_webview = sys.modules.get("webview")
         old_argv = sys.argv[:]
+        old_console_env = os.environ.get("NODE_OPEN_CLIENT_CONSOLE")
         prints = []
         started_states = []
         posts = []
@@ -2561,6 +2717,7 @@ class MysqlConfigTest(unittest.TestCase):
             return types.SimpleNamespace(status_code=200)
 
         try:
+            os.environ["NODE_OPEN_CLIENT_CONSOLE"] = "0"
             sys.argv = ["client.py"]
             sys.modules["requests"] = types.SimpleNamespace(post=fake_post, get=lambda *args, **kwargs: None)
             sys.modules["webview"] = None
@@ -2602,6 +2759,10 @@ class MysqlConfigTest(unittest.TestCase):
             self.assertTrue(fake_server.close_called)
         finally:
             sys.argv = old_argv
+            if old_console_env is None:
+                os.environ.pop("NODE_OPEN_CLIENT_CONSOLE", None)
+            else:
+                os.environ["NODE_OPEN_CLIENT_CONSOLE"] = old_console_env
             sys.modules.pop("client", None)
             if old_requests is None:
                 sys.modules.pop("requests", None)
@@ -2961,6 +3122,38 @@ class MysqlConfigTest(unittest.TestCase):
             else:
                 sys.modules["webview"] = old_webview
 
+    def test_client_storage_probe_reports_small_shard_usage_display(self):
+        old_requests = sys.modules.get("requests")
+        old_webview = sys.modules.get("webview")
+        try:
+            sys.modules["requests"] = types.SimpleNamespace(post=lambda *args, **kwargs: None, get=lambda *args, **kwargs: None)
+            sys.modules["webview"] = None
+            sys.modules.pop("client", None)
+            client_module = importlib.import_module("client")
+            with tempfile.TemporaryDirectory() as tmp:
+                storage_dir = Path(tmp)
+                client_module.prepare_storage_root(str(storage_dir), "NODE_A", "MAC_A")
+                shard_dir = client_module.storage_store_dir(str(storage_dir)) / "files" / ("a" * 64)
+                shard_dir.mkdir(parents=True, exist_ok=True)
+                (shard_dir / "0.part").write_bytes(b"x" * 1536)
+
+                result = client_module.inspect_storage_dir(str(storage_dir), "NODE_A", "MAC_A", 1)
+
+                self.assertEqual(result["storage_status"], "ok")
+                self.assertGreaterEqual(result["storage_used_bytes"], 1536)
+                self.assertGreater(result["storage_used_gb"], 0)
+                self.assertIn("KB", result["storage_used_display"])
+        finally:
+            sys.modules.pop("client", None)
+            if old_requests is None:
+                sys.modules.pop("requests", None)
+            else:
+                sys.modules["requests"] = old_requests
+            if old_webview is None:
+                sys.modules.pop("webview", None)
+            else:
+                sys.modules["webview"] = old_webview
+
     def test_client_storage_probe_without_directory_preserves_ipfs_fallback(self):
         old_requests = sys.modules.get("requests")
         old_webview = sys.modules.get("webview")
@@ -3019,6 +3212,64 @@ class MysqlConfigTest(unittest.TestCase):
             else:
                 sys.modules["webview"] = old_webview
 
+    def test_client_opens_local_management_console_browser_by_default(self):
+        old_requests = sys.modules.get("requests")
+        old_webview = sys.modules.get("webview")
+        old_env = os.environ.get("NODE_OPEN_CLIENT_CONSOLE")
+        opened_urls = []
+        try:
+            os.environ.pop("NODE_OPEN_CLIENT_CONSOLE", None)
+            sys.modules["requests"] = types.SimpleNamespace(post=lambda *args, **kwargs: None, get=lambda *args, **kwargs: None)
+            sys.modules["webview"] = None
+            sys.modules.pop("client", None)
+            client_module = importlib.import_module("client")
+
+            self.assertTrue(client_module.should_open_client_console())
+            client_module.open_client_console(8877, open_func=opened_urls.append)
+
+            self.assertEqual(opened_urls, ["http://127.0.0.1:8877/"])
+        finally:
+            if old_env is None:
+                os.environ.pop("NODE_OPEN_CLIENT_CONSOLE", None)
+            else:
+                os.environ["NODE_OPEN_CLIENT_CONSOLE"] = old_env
+            sys.modules.pop("client", None)
+            if old_requests is None:
+                sys.modules.pop("requests", None)
+            else:
+                sys.modules["requests"] = old_requests
+            if old_webview is None:
+                sys.modules.pop("webview", None)
+            else:
+                sys.modules["webview"] = old_webview
+
+    def test_client_can_disable_auto_browser_for_local_management_console(self):
+        old_requests = sys.modules.get("requests")
+        old_webview = sys.modules.get("webview")
+        old_env = os.environ.get("NODE_OPEN_CLIENT_CONSOLE")
+        try:
+            os.environ["NODE_OPEN_CLIENT_CONSOLE"] = "0"
+            sys.modules["requests"] = types.SimpleNamespace(post=lambda *args, **kwargs: None, get=lambda *args, **kwargs: None)
+            sys.modules["webview"] = None
+            sys.modules.pop("client", None)
+            client_module = importlib.import_module("client")
+
+            self.assertFalse(client_module.should_open_client_console())
+        finally:
+            if old_env is None:
+                os.environ.pop("NODE_OPEN_CLIENT_CONSOLE", None)
+            else:
+                os.environ["NODE_OPEN_CLIENT_CONSOLE"] = old_env
+            sys.modules.pop("client", None)
+            if old_requests is None:
+                sys.modules.pop("requests", None)
+            else:
+                sys.modules["requests"] = old_requests
+            if old_webview is None:
+                sys.modules.pop("webview", None)
+            else:
+                sys.modules["webview"] = old_webview
+
     def test_client_map_window_requires_amap_security_config(self):
         old_requests = sys.modules.get("requests")
         old_webview = sys.modules.get("webview")
@@ -3060,6 +3311,7 @@ class MysqlConfigTest(unittest.TestCase):
         old_requests = sys.modules.get("requests")
         old_webview = sys.modules.get("webview")
         old_argv = sys.argv[:]
+        old_console_env = os.environ.get("NODE_OPEN_CLIENT_CONSOLE")
         heartbeat_payloads = []
 
         def fake_post(url, json=None, timeout=10):
@@ -3068,6 +3320,7 @@ class MysqlConfigTest(unittest.TestCase):
             return types.SimpleNamespace(status_code=200)
 
         try:
+            os.environ["NODE_OPEN_CLIENT_CONSOLE"] = "0"
             sys.argv = ["client.py"]
             sys.modules["requests"] = types.SimpleNamespace(post=fake_post, get=lambda *args, **kwargs: None)
             sys.modules["webview"] = None
@@ -3098,6 +3351,10 @@ class MysqlConfigTest(unittest.TestCase):
             self.assertIn("storage_error", heartbeat_payloads[0])
         finally:
             sys.argv = old_argv
+            if old_console_env is None:
+                os.environ.pop("NODE_OPEN_CLIENT_CONSOLE", None)
+            else:
+                os.environ["NODE_OPEN_CLIENT_CONSOLE"] = old_console_env
             sys.modules.pop("client", None)
             if old_requests is None:
                 sys.modules.pop("requests", None)
@@ -3719,6 +3976,10 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertIn("redirectToLogin", body)
         self.assertIn('searchParams.set("next"', body)
         self.assertIn('window.location.href = loginUrl.toString()', body)
+        self.assertIn("generateDefaultExtractCode", body)
+        self.assertIn("defaultExtractCodeTouched", body)
+        self.assertIn("share_url_with_extract_code", body)
+        self.assertIn('target="_blank"', body)
 
     def test_user_login_page_renders_forms_and_token_storage(self):
         server_main = load_server_main(SESSION_SECRET="session-secret")
@@ -3732,23 +3993,39 @@ class MysqlConfigTest(unittest.TestCase):
         for marker in (
             'data-auth-tab="login"',
             'data-auth-tab="register"',
-            'data-auth-tab="phone"',
-            'data-auth-tab="email"',
             'data-auth-tab="wallet"',
-            'data-auth-tab="wechat"',
-            'data-auth-tab="qq"',
             'id="loginPanel"',
             'id="registerPanel"',
-            'id="phonePanel"',
-            'id="emailPanel"',
             'id="walletPanel"',
-            'id="wechatPanel"',
-            'id="qqPanel"',
+            'id="otherLoginButton"',
+            'id="otherLoginModal"',
+            'data-other-login="phone"',
+            'data-other-login="email"',
+            'data-other-login="wechat"',
+            'data-other-login="qq"',
+            'id="phoneLoginModal"',
+            'id="emailLoginModal"',
+            'id="wechatLoginModal"',
+            'id="qqLoginModal"',
+            'id="phoneSmsCode"',
+            'id="emailVerifyCode"',
+            '发送短信验证码',
+            '发送邮箱验证码',
+            '微信登录二维码',
+            'QQ 登录二维码',
             "switchAuthTab",
+            "openOtherLoginModal",
             "redirectAfterLogin",
             "URLSearchParams",
         ):
             self.assertIn(marker, body)
+        for marker in (
+            'data-auth-tab="phone"',
+            'data-auth-tab="email"',
+            'data-auth-tab="wechat"',
+            'data-auth-tab="qq"',
+        ):
+            self.assertNotIn(marker, body)
         for provider in ("163.com", "gmail.com", "outlook.com", "icloud.com"):
             self.assertIn(provider, body)
         self.assertIn("/api/auth/register", body)
@@ -3775,6 +4052,21 @@ class MysqlConfigTest(unittest.TestCase):
         ):
             self.assertIn(api_path, body)
         self.assertIn("user_token", body)
+        self.assertIn("createShareForFile", body)
+        self.assertIn("defaultExtractCodeForFile", body)
+        self.assertNotIn("prompt(", body)
+        for marker in (
+            'id="shareCreateModal"',
+            "openShareDialog",
+            "closeShareDialog",
+            'id="shareFileHashInput"',
+            'id="shareExtractCodeInput"',
+            'id="shareResultBox"',
+            'id="shareCreateButton"',
+        ):
+            self.assertIn(marker, body)
+        self.assertIn('/api/user/files/${encodeURIComponent(fileHash)}/shares', body)
+        self.assertIn('target="_blank"', body)
 
     def test_public_share_page_downloads_with_inline_extract_code(self):
         server_main = load_server_main(SESSION_SECRET="session-secret")
@@ -3788,6 +4080,7 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertIn("/api/share/demo-share", body)
         self.assertIn("/api/share/${encodeURIComponent(shareCode)}/download", body)
         self.assertIn("extract_code", body)
+        self.assertIn('new URLSearchParams(window.location.search).get("extract_code")', body)
 
     def test_user_files_list_selects_only_current_owner(self):
         auth = importlib.import_module("auth")
@@ -3954,6 +4247,47 @@ class MysqlConfigTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "真实客户端"):
             server_main.persist_file_to_storage_nodes("c" * 64, b"encrypted", ["NODE_A"])
 
+    def test_select_storage_node_candidates_uses_heartbeat_capacity_and_api_url(self):
+        server_main = load_server_main()
+        executed = []
+
+        class FakeCursor:
+            def execute(self, sql, params=None):
+                executed.append((sql, params))
+
+            def fetchall(self):
+                return [("NODE_A",), ("NODE_B",)]
+
+        server_main.cursor = FakeCursor()
+
+        nodes = server_main.select_storage_node_candidates(limit=2)
+
+        self.assertEqual(nodes, ["NODE_A", "NODE_B"])
+        sql, params = executed[-1]
+        sql_lower = sql.lower()
+        self.assertIn("from node_power", sql_lower)
+        self.assertIn("storage_status", sql_lower)
+        self.assertIn("storage_available_gb", sql_lower)
+        self.assertIn("storage_api_url", sql_lower)
+        self.assertEqual(params[-1], 2)
+
+    def test_get_node_storage_api_url_reads_latest_heartbeat_endpoint(self):
+        server_main = load_server_main()
+        executed = []
+
+        class FakeCursor:
+            def execute(self, sql, params=None):
+                executed.append((sql, params))
+
+            def fetchone(self):
+                return ("http://127.0.0.1:8787",)
+
+        server_main.cursor = FakeCursor()
+
+        self.assertEqual(server_main.get_node_storage_api_url("NODE_A"), "http://127.0.0.1:8787")
+        self.assertIn("storage_api_url", executed[-1][0])
+        self.assertEqual(executed[-1][1], ("NODE_A",))
+
     def test_user_file_upload_db_failure_rolls_back(self):
         auth = importlib.import_module("auth")
         server_main = load_server_main(SESSION_SECRET="session-secret")
@@ -3997,8 +4331,8 @@ class MysqlConfigTest(unittest.TestCase):
         server_main.aes_encrypt = lambda data: b"encrypted"
         server_main.file_shard = lambda data: [data]
         server_main.get_file_hash = lambda data: new_hash
-        server_main.get_backup_nodes = lambda: ["NODE_A"]
-        server_main.persist_file_to_storage_nodes = lambda file_hash, encrypted, nodes: nodes
+        server_main.select_storage_node_candidates = lambda limit=None: ["NODE_A"]
+        server_main.persist_file_to_storage_nodes = lambda file_hash, encrypted, nodes, request_id="": nodes
         server_main.get_ipfs_client = lambda: FakeIPFSClient()
 
         response = server_main.app.test_client().post(
@@ -4065,8 +4399,8 @@ class MysqlConfigTest(unittest.TestCase):
         server_main.aes_encrypt = lambda data: b"encrypted"
         server_main.file_shard = lambda data: [data]
         server_main.get_file_hash = lambda data: new_hash
-        server_main.get_backup_nodes = lambda: ["NODE_A"]
-        server_main.persist_file_to_storage_nodes = lambda file_hash, encrypted, nodes: nodes
+        server_main.select_storage_node_candidates = lambda limit=None: ["NODE_A"]
+        server_main.persist_file_to_storage_nodes = lambda file_hash, encrypted, nodes, request_id="": nodes
         server_main.get_ipfs_client = lambda: FakeIPFSClient()
 
         response = server_main.app.test_client().post(
@@ -4126,8 +4460,8 @@ class MysqlConfigTest(unittest.TestCase):
         server_main.aes_encrypt = lambda data: b"encrypted"
         server_main.file_shard = lambda data: [data]
         server_main.get_file_hash = lambda data: new_hash
-        server_main.get_backup_nodes = lambda: ["NODE_A", "NODE_B", "SERVER_BACKUP_NODE"]
-        server_main.persist_file_to_storage_nodes = lambda file_hash, encrypted, nodes: stored_payloads.append((file_hash, encrypted, nodes)) or nodes
+        server_main.select_storage_node_candidates = lambda limit=None: ["NODE_A", "NODE_B"]
+        server_main.persist_file_to_storage_nodes = lambda file_hash, encrypted, nodes, request_id="": stored_payloads.append((file_hash, encrypted, nodes)) or nodes
         server_main.get_ipfs_client = lambda: (_ for _ in ()).throw(Exception("ipfs down"))
 
         response = server_main.app.test_client().post(
@@ -4204,7 +4538,7 @@ class MysqlConfigTest(unittest.TestCase):
             server_main.init_db = lambda: True
             server_main.aes_encrypt = lambda data: b"abcdefgh"
             server_main.get_file_hash = lambda data: new_hash
-            server_main.get_backup_nodes = lambda: ["NODE_A"]
+            server_main.select_storage_node_candidates = lambda limit=None: ["NODE_A"]
             server_main.persist_file_to_storage_nodes = lambda file_hash, encrypted, nodes, request_id="": ["NODE_A"]
             server_main.get_ipfs_client = lambda: FakeIPFSClient()
 
@@ -4278,7 +4612,7 @@ class MysqlConfigTest(unittest.TestCase):
         server_main.aes_encrypt = lambda data: b"encrypted"
         server_main.file_shard = lambda data: [data]
         server_main.get_file_hash = lambda data: new_hash
-        server_main.get_backup_nodes = lambda: ["NODE_A"]
+        server_main.select_storage_node_candidates = lambda limit=None: ["NODE_A"]
         server_main.persist_file_to_storage_nodes = lambda file_hash, encrypted, nodes, request_id="": events.append("client") or ["NODE_A"]
         server_main.get_ipfs_client = lambda: FakeIPFSClient()
 
@@ -4316,7 +4650,7 @@ class MysqlConfigTest(unittest.TestCase):
         server_main.aes_encrypt = lambda data: b"encrypted"
         server_main.file_shard = lambda data: [data]
         server_main.get_file_hash = lambda data: "a" * 64
-        server_main.get_backup_nodes = lambda: ["SERVER_BACKUP_NODE"]
+        server_main.select_storage_node_candidates = lambda limit=None: []
         server_main.persist_file_to_storage_nodes = lambda *args: self.fail("should not persist without user nodes")
         server_main.get_ipfs_client = lambda: self.fail("should not upload only to IPFS without user nodes")
 
@@ -4390,8 +4724,8 @@ class MysqlConfigTest(unittest.TestCase):
         server_main.aes_encrypt = lambda data: b"encrypted"
         server_main.file_shard = lambda data: [data]
         server_main.get_file_hash = lambda data: duplicate_hash
-        server_main.get_backup_nodes = lambda: ["NODE_A"]
-        server_main.persist_file_to_storage_nodes = lambda file_hash, encrypted, nodes: nodes
+        server_main.select_storage_node_candidates = lambda limit=None: ["NODE_A"]
+        server_main.persist_file_to_storage_nodes = lambda file_hash, encrypted, nodes, request_id="": nodes
         server_main.get_ipfs_client = lambda: FakeIPFSClient()
 
         response = server_main.app.test_client().post(
@@ -4487,6 +4821,7 @@ class MysqlConfigTest(unittest.TestCase):
         data = response.get_json()["data"]
         self.assertEqual(data["file_hash"], file_hash)
         self.assertTrue(data["share_url"].startswith("/s/"))
+        self.assertEqual(data["share_url_with_extract_code"], f"{data['share_url']}?extract_code=ABCD")
         self.assertTrue(data["extract_code_required"])
         self.assertNotIn("extract_code_hash", data)
         insert_params = [
@@ -5406,6 +5741,96 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertTrue(status["online"])
         self.assertEqual(status["peer_id"], "peer1")
         self.assertEqual(status["repo_size"], 1024)
+
+    def test_ipfs_client_uses_configured_rpc_api_address(self):
+        server_main = load_server_main()
+        connected = []
+        old_env = os.environ.copy()
+        try:
+            os.environ["IPFS_API_ADDR"] = "/ip4/127.0.0.1/tcp/5002"
+            server_main.ipfshttpclient = types.SimpleNamespace(
+                connect=lambda addr: connected.append(addr) or object()
+            )
+
+            server_main.get_ipfs_client()
+
+            self.assertEqual(connected, ["/ip4/127.0.0.1/tcp/5002"])
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+    def test_ipfs_api_address_reads_kubo_config_when_env_missing(self):
+        server_main = load_server_main()
+        old_env = os.environ.copy()
+        try:
+            os.environ.pop("IPFS_API_ADDR", None)
+            os.environ.pop("IPFS_API_MULTIADDR", None)
+            os.environ.pop("IPFS_API_URL", None)
+            server_main.subprocess.check_output = lambda *args, **kwargs: "/ip4/127.0.0.1/tcp/5002\n"
+
+            self.assertEqual(server_main.get_ipfs_api_addr(), "/ip4/127.0.0.1/tcp/5002")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+    def test_ipfs_client_falls_back_to_http_api_for_unsupported_daemon_version(self):
+        server_main = load_server_main()
+        old_env = os.environ.copy()
+        try:
+            os.environ["IPFS_API_ADDR"] = "/ip4/127.0.0.1/tcp/5002"
+
+            def reject_new_daemon(addr):
+                raise Exception("Unsupported daemon version '0.42.0' (not in range: 0.4.23 <= ... < 0.8.0)")
+
+            server_main.ipfshttpclient = types.SimpleNamespace(connect=reject_new_daemon)
+            client = server_main.get_ipfs_client()
+
+            self.assertIsInstance(client, server_main.HttpIPFSClient)
+            self.assertEqual(client.base_url, "http://127.0.0.1:5002/api/v0")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+    def test_http_ipfs_client_uses_kubo_http_api_for_status_add_and_cat(self):
+        server_main = load_server_main()
+        calls = []
+
+        class FakeResponse:
+            def __init__(self, payload=None, content=b""):
+                self.payload = payload or {}
+                self.content = content
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return self.payload
+
+        def fake_post(url, **kwargs):
+            calls.append((url, kwargs))
+            if url.endswith("/id"):
+                return FakeResponse({"ID": "peer1", "Addresses": ["/ip4/127.0.0.1/tcp/4001"]})
+            if url.endswith("/repo/stat"):
+                return FakeResponse({"RepoSize": 10, "StorageMax": 20, "NumObjects": 2})
+            if url.endswith("/add"):
+                return FakeResponse({"Hash": "cid1"})
+            if url.endswith("/cat"):
+                return FakeResponse(content=b"encrypted")
+            raise AssertionError(url)
+
+        old_requests = server_main.requests
+        try:
+            server_main.requests = types.SimpleNamespace(post=fake_post)
+            client = server_main.HttpIPFSClient("/ip4/127.0.0.1/tcp/5002")
+
+            self.assertEqual(client.id()["ID"], "peer1")
+            self.assertEqual(client.repo_stat()["RepoSize"], 10)
+            self.assertEqual(client.add_bytes(b"payload"), "cid1")
+            self.assertEqual(client.cat("cid1"), b"encrypted")
+            self.assertEqual(calls[2][1]["files"]["file"][1], b"payload")
+            self.assertEqual(calls[3][1]["params"], {"arg": "cid1"})
+        finally:
+            server_main.requests = old_requests
 
     def test_file_download_endpoint_returns_decrypted_attachment(self):
         server_main = load_server_main(ADMIN_API_TOKEN="secret-token")

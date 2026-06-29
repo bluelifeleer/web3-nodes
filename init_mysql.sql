@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS `node_power` (
   `storage_free_gb` float DEFAULT 0,
   `storage_quota_gb` float DEFAULT 0,
   `storage_available_gb` float DEFAULT 0,
+  `storage_api_url` varchar(255) DEFAULT '',
   `online_duration` int DEFAULT 0 COMMENT '当日在线时长分钟',
   `upload_bandwidth` float DEFAULT 0 COMMENT '当日上行流量',
   `update_time` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
