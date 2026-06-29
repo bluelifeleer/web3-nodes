@@ -1,0 +1,38 @@
+
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>文件分享</title>
+    <link rel="stylesheet" href="/static/public-share.css">
+</head>
+<body class="commercial-page public-share-page">
+    <div class="share-shell">
+    <nav class="modern-nav">
+        <div class="brand-lockup"><span class="brand-mark"></span><span>Web3 Nodes Store</span></div>
+        <div class="nav-actions"><a href="/">首页</a><a href="/user/login">用户登录</a></div>
+    </nav>
+    <header class="page-hero">
+        <div>
+            <span class="page-kicker">安全文件交付</span>
+            <h1>文件分享</h1>
+            <p>通过分享码获取文件信息，填写提取码后即可下载。下载行为会记录到分享与节点收益系统。</p>
+        </div>
+    </header>
+    <section class="panel commercial-card" data-api-share="/api/share/{{ share_code }}">
+        <div id="shareMeta" class="meta">正在加载分享信息...</div>
+        <label id="extractCodeLabel" hidden>提取码
+            <input id="extractCodeInput" name="extract_code" autocomplete="off">
+        </label>
+        <button id="downloadButton">下载</button>
+    </section>
+    <pre id="statusBox" class="status">等待下载...</pre>
+    </div>
+    <script>
+        window.PUBLIC_SHARE_CONFIG = {
+            shareCode: {{ share_code|tojson }}
+        };
+    </script>
+    <script src="/static/public-share.js"></script>
+</body>
+</html>

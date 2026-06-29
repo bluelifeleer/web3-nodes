@@ -1,0 +1,64 @@
+
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>用户文件上传</title>
+    <link rel="stylesheet" href="/static/user-upload.css">
+</head>
+<body class="commercial-page user-upload-page">
+    <div class="page-shell">
+    <nav class="modern-nav">
+        <div class="brand-lockup"><span class="brand-mark"></span><span>Web3 Nodes Store</span></div>
+        <div class="nav-actions"><a href="/">首页</a><a href="/user/dashboard">用户面板</a><a href="/user/login">登录</a></div>
+    </nav>
+    <header class="page-hero">
+        <div>
+            <span class="page-kicker">文件产品</span>
+            <h1>上传文件并创建可控分享</h1>
+            <p>支持公开或私有存储，上传后可生成带提取码、过期时间和下载次数限制的商业化分享链接。</p>
+        </div>
+    </header>
+    <div id="loginNotice" class="notice" hidden>未检测到登录 Token，请先登录后再上传。</div>
+    <div class="commercial-grid">
+    <section class="panel commercial-card">
+        <form id="uploadForm">
+            <label>选择文件
+                <input id="fileInput" name="file" type="file" required>
+            </label>
+            <label>文件访问权限
+                <select id="visibilityInput" name="visibility">
+                    <option value="public">公开</option>
+                    <option value="private">私有</option>
+                </select>
+            </label>
+            <button type="submit">上传文件</button>
+        </form>
+    </section>
+    <section class="panel commercial-card">
+        <h2>创建分享</h2>
+        <form id="shareForm">
+            <label>文件哈希
+                <input id="fileHashInput" name="file_hash" placeholder="上传成功后自动填入" required>
+            </label>
+            <div class="grid">
+                <label>提取码
+                    <input id="extractCodeInput" name="extract_code" placeholder="默认自动生成，可修改">
+                </label>
+                <label>过期时间
+                    <input id="expiresAtInput" name="expires_at" type="datetime-local">
+                </label>
+                <label>下载次数限制
+                    <input id="maxDownloadsInput" name="max_downloads" type="number" min="0" value="0">
+                </label>
+            </div>
+            <button type="submit" class="secondary">生成分享链接</button>
+        </form>
+        <div id="shareLinkBox" class="linkbox" hidden></div>
+    </section>
+    </div>
+    <pre id="resultBox" class="status">等待上传...</pre>
+    </div>
+    <script src="/static/user-upload.js"></script>
+</body>
+</html>

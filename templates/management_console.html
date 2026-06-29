@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>统一管理台</title>
+    <link rel="stylesheet" href="/static/console.css">
+</head>
+<body class="commercial-page unified-console-page">
+    <div class="unified-console-shell" data-console-role="{{ role }}">
+        <aside class="console-sidebar">
+            <div class="console-brand"><span class="console-brand-mark"></span><span>Web3 Nodes 管理台</span></div>
+            <span class="console-role-label">统一权限入口</span>
+            <nav>
+                <a data-permission="user" href="/user/dashboard">用户工作台</a>
+                <a data-permission="user" href="/user/upload">上传文件</a>
+                <a data-permission="user" href="/user/dashboard#sharesBox">我的分享</a>
+                <a data-permission="user" href="/user/dashboard#withdrawalsBox">收益提现</a>
+                <a data-permission="admin" href="/admin">管理员</a>
+                <a data-permission="admin" href="/admin#nodeTable">节点管理</a>
+                <a data-permission="admin" href="/admin#storageAuditTable">审计日志</a>
+                <a data-permission="admin" href="/admin#fileTable">文件存证</a>
+            </nav>
+        </aside>
+        <main class="console-main">
+            <div class="page-shell">
+                <div class="console-topbar">
+                    <strong>统一管理台</strong>
+                    <span class="console-permission-note">当前角色：{{ role_label }}，数据权限由用户 token / 管理员 token 控制。</span>
+                </div>
+                <header class="page-hero">
+                    <div>
+                        <span class="page-kicker">前后端统一入口</span>
+                        <h1>{{ role_title }}</h1>
+                        <p>用户和管理员共用一套管理台框架，左侧按权限切换模块，内容区复用现有 API 与业务能力。</p>
+                    </div>
+                </header>
+                <section class="console-home-grid">
+                    <div class="commercial-card console-home-card" data-permission="user">
+                        <h3>用户工作台</h3>
+                        <p>文件、分享、收益、提现集中管理。</p>
+                        <a class="btn" href="/user/dashboard">进入用户管理</a>
+                    </div>
+                    <div class="commercial-card console-home-card" data-permission="user">
+                        <h3>上传文件</h3>
+                        <p>上传后自动分片、加密、备份并生成分享能力。</p>
+                        <a class="btn" href="/user/upload">上传文件</a>
+                    </div>
+                    <div class="commercial-card console-home-card" data-permission="admin">
+                        <h3>管理员</h3>
+                        <p>节点、容量、文件、提现和审计统一运营。</p>
+                        <a class="btn" href="/admin">进入管理员后台</a>
+                    </div>
+                </section>
+            </div>
+        </main>
+    </div>
+    <script src="/static/console.js"></script>
+</body>
+</html>

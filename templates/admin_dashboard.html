@@ -1,0 +1,218 @@
+
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>Web3节点激励后台面板</title>
+    <link rel="stylesheet" href="/static/admin-dashboard.css">
+    {% if amap_web_key and amap_security_jscode %}
+    <script type="text/javascript">
+        window._AMapSecurityConfig = { securityJsCode: {{ amap_security_jscode|tojson }} };
+    </script>
+    <script type="text/javascript" src="https://webapi.amap.com/maps?v=2.0&key={{ amap_web_key }}"></script>
+    {% endif %}
+</head>
+<body class="commercial-page admin-dashboard-page">
+    <div class="unified-console-shell" data-console-role="admin">
+
+        <aside class="console-sidebar">
+            <div class="console-brand"><span class="console-brand-mark"></span><span>Web3 Nodes 管理台</span></div>
+            <span class="console-role-label">统一权限入口</span>
+            <nav>
+                <a data-permission="user" href="/user/dashboard">用户工作台</a>
+                <a data-permission="user" href="/user/upload">上传文件</a>
+                <a data-permission="user" href="/user/dashboard#sharesBox">我的分享</a>
+                <a data-permission="user" href="/user/dashboard#withdrawalsBox">收益提现</a>
+                <a data-permission="admin" href="/admin">管理员</a>
+                <a data-permission="admin" href="/admin#nodeTable">节点管理</a>
+                <a data-permission="admin" href="/admin#storageAuditTable">审计日志</a>
+                <a data-permission="admin" href="/admin#fileTable">文件存证</a>
+            </nav>
+        </aside>
+
+    <main class="console-main">
+    <div class="page-shell">
+    <div class="console-topbar">
+        <strong>管理员运营台</strong>
+        <span class="console-permission-note">管理员权限：节点、文件、提现、审计和地图数据。</span>
+    </div>
+    <nav class="modern-nav">
+        <div class="brand-lockup"><span class="brand-mark"></span><span>Web3 Nodes Store</span></div>
+        <div class="nav-actions"><a href="/">首页</a><a href="/admin/login" onclick="localStorage.removeItem('admin_token')">退出登录</a></div>
+    </nav>
+    <header class="page-hero">
+        <div>
+            <span class="page-kicker">服务端后台</span>
+            <h1>节点、文件与收益运营中心</h1>
+            <p>实时查看节点网络、文件存证、收益快照、邀请关系与提现审核，适合商业化运营和节点规模化扩展。</p>
+        </div>
+    </header>
+    <div class="box admin-status-bar commercial-card">
+        <strong>服务端后台</strong>
+        <span id="adminTokenStatus" class="token-status"></span>
+        <span id="adminAutoRefreshStatus" class="token-status"></span>
+    </div>
+
+    <div class="box commercial-card">
+        <h3>分成比例配置</h3>
+        <input type="text" id="selfRatio" placeholder="上级分成比例" value="0.15">
+        <input type="text" id="nodeRatio" placeholder="节点分成比例" value="0.85">
+        <button onclick="setRatio()">保存配置</button>
+    </div>
+
+    <div class="box commercial-card">
+        <h3>全网节点列表</h3>
+        <button onclick="getNodes()">刷新节点数据</button>
+        <div class="admin-node-grid">
+        <table>
+            <thead>
+                <tr>
+                    <th>节点地址</th>
+                    <th>个人推广码</th>
+                    <th>上级推广码</th>
+                    <th>存储占用G</th>
+                    <th>总容量G</th>
+                    <th>已用G</th>
+                    <th>可用容量G</th>
+                    <th>目录状态</th>
+                    <th>在线时长(分)</th>
+                    <th>上行带宽</th>
+                    <th>在线状态</th>
+                    <th>质量分</th>
+                </tr>
+            </thead>
+            <tbody id="nodeTable"></tbody>
+        </table>
+        </div>
+    </div>
+
+    <div class="box commercial-card" style="min-height:600px;">
+        <h3>🌍 全网节点全球地理分布地图</h3>
+        <p style="color:#64748b;font-size:14px;margin-bottom:15px;">实时在线节点打点｜离线节点灰色显示｜未配置 AMAP_WEB_KEY 或 AMAP_SECURITY_JSCODE 时自动切换为节点分布看板</p>
+        <div id="map" style="width:100%;height:500px;border-radius:8px;"></div>
+        <div id="nodeDistributionFallback" class="commercial-card" style="display:none;margin-top:12px;padding:14px;background:#f8fafc;"></div>
+    </div>
+
+    <div class="box commercial-card">
+        <h3>收益结算记录</h3>
+        <button onclick="getReward()">刷新收益数据</button>
+        <table>
+            <thead>
+                <tr>
+                    <th>节点地址</th>
+                    <th>收益类型</th>
+                    <th>收益金额</th>
+                    <th>贡献值</th>
+                    <th>来源节点</th>
+                    <th>结算日期</th>
+                    <th>结算时间</th>
+                </tr>
+            </thead>
+            <tbody id="rewardTable"></tbody>
+        </table>
+    </div>
+
+    <div class="box commercial-card">
+        <h3>提现申请</h3>
+        <button onclick="getAdminWithdrawals()">刷新提现</button>
+        <table>
+            <thead><tr><th>ID</th><th>用户/节点</th><th>钱包</th><th>金额</th><th>状态</th><th>备注</th><th>操作</th></tr></thead>
+            <tbody id="withdrawalTable"></tbody>
+        </table>
+    </div>
+
+    <div class="box commercial-card">
+        <h3>存储审计日志</h3>
+        <input id="auditFileHashFilter" placeholder="file_hash" style="min-width:220px">
+        <input id="auditNodeFilter" placeholder="node_address">
+        <input id="auditEventFilter" placeholder="event_type">
+        <input id="auditStatusFilter" placeholder="status">
+        <button onclick="getStorageAuditLogs()">刷新日志</button>
+        <button onclick="exportStorageAudit('json')">导出JSON</button>
+        <button onclick="exportStorageAudit('csv')">导出CSV</button>
+        <table>
+            <thead><tr><th>时间</th><th>事件</th><th>文件</th><th>分片</th><th>节点</th><th>状态</th><th>详情</th></tr></thead>
+            <tbody id="storageAuditTable"></tbody>
+        </table>
+        <pre id="storageAuditDetail" style="white-space:pre-wrap;background:#f8fafc;padding:12px;border-radius:6px;margin-top:10px;"></pre>
+    </div>
+
+    <div class="box commercial-card">
+    <h3>📁 文件加密上链存证记录（分布式存储）</h3>
+    <input id="fileSearch" placeholder="搜索文件名 / 哈希 / CID" style="min-width:260px">
+    <button onclick="getFileList()">刷新存证数据</button>
+    <button onclick="getFileHealth()">副本健康</button>
+    <button onclick="getIpfsStatus()">IPFS状态</button>
+    <span id="ipfsStatusText" style="margin-left:10px;color:#475569"></span>
+    <table>
+        <thead>
+            <tr>
+                <th>文件名</th>
+                <th>IPFS-CID</th>
+                <th>文件哈希(上链)</th>
+                <th>分片数</th>
+                <th>存储节点数</th>
+                <th>访问权限</th>
+                <th>健康状态</th>
+                <th>上传时间</th>
+                <th>操作</th>
+            </tr>
+        </thead>
+        <tbody id="fileTable"></tbody>
+    </table>
+    </div>
+
+    <div class="box commercial-card">
+        <h3>节点排行榜</h3>
+        <button onclick="getLeaderboard()">刷新排行榜</button>
+        <table>
+            <thead>
+                <tr>
+                    <th>排名</th>
+                    <th>节点地址</th>
+                    <th>质量分</th>
+                    <th>在线状态</th>
+                    <th>存储G</th>
+                    <th>在线分钟</th>
+                    <th>带宽</th>
+                </tr>
+            </thead>
+            <tbody id="leaderboardTable"></tbody>
+        </table>
+    </div>
+
+    <div class="box commercial-card">
+        <h3>每日收益快照</h3>
+        <button onclick="getDailyReward()">刷新每日收益</button>
+        <table>
+            <thead>
+                <tr>
+                    <th>日期</th>
+                    <th>节点地址</th>
+                    <th>收益类型</th>
+                    <th>收益金额</th>
+                    <th>贡献值</th>
+                    <th>记录数</th>
+                </tr>
+            </thead>
+            <tbody id="dailyRewardTable"></tbody>
+        </table>
+    </div>
+
+    <div class="box commercial-card">
+        <h3>邀请关系树</h3>
+        <button onclick="getInviteTree()">刷新邀请关系</button>
+        <pre id="inviteTreeBox" style="white-space:pre-wrap;background:#f8fafc;padding:12px;border-radius:6px;"></pre>
+    </div>
+
+    </div>
+    </main>
+    </div>
+<script>
+    window.ADMIN_DASHBOARD_CONFIG = {
+        amapWebKey: {{ (amap_web_key or "")|tojson }}
+    };
+</script>
+<script src="/static/admin-dashboard.js"></script>
+</body>
+</html>

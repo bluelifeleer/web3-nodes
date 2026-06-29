@@ -1,0 +1,125 @@
+
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>用户面板</title>
+    <link rel="stylesheet" href="/static/user-dashboard.css">
+</head>
+<body class="commercial-page user-dashboard-page">
+    <div class="unified-console-shell" data-console-role="user">
+
+        <aside class="console-sidebar">
+            <div class="console-brand"><span class="console-brand-mark"></span><span>Web3 Nodes 管理台</span></div>
+            <span class="console-role-label">统一权限入口</span>
+            <nav>
+                <a data-permission="user" href="/user/dashboard">用户工作台</a>
+                <a data-permission="user" href="/user/upload">上传文件</a>
+                <a data-permission="user" href="/user/dashboard#sharesBox">我的分享</a>
+                <a data-permission="user" href="/user/dashboard#withdrawalsBox">收益提现</a>
+                <a data-permission="admin" href="/admin">管理员</a>
+                <a data-permission="admin" href="/admin#nodeTable">节点管理</a>
+                <a data-permission="admin" href="/admin#storageAuditTable">审计日志</a>
+                <a data-permission="admin" href="/admin#fileTable">文件存证</a>
+            </nav>
+        </aside>
+
+    <main class="console-main">
+    <div class="page-shell">
+    <div class="console-topbar">
+        <strong>用户工作台</strong>
+        <span class="console-permission-note">用户权限：文件、分享、收益、提现和钱包绑定。</span>
+    </div>
+    <nav class="modern-nav">
+        <div class="brand-lockup"><span class="brand-mark"></span><span>Web3 Nodes Store</span></div>
+        <div class="nav-actions"><a href="/">首页</a><a href="/user/upload">上传文件</a><a href="/user/login">登录</a></div>
+    </nav>
+    <header class="page-hero">
+        <div>
+            <span class="page-kicker">用户工作台</span>
+            <h1>文件资产、分享链接与收益总览</h1>
+            <p>集中查看账户、积分、收益、文件、分享和提现，适合作为面向客户的自助运营中心。</p>
+        </div>
+    </header>
+    <section class="panel commercial-card">
+        <button id="refreshButton">刷新</button>
+        <pre id="statusBox" class="status">正在读取 user_token...</pre>
+    </section>
+    <div class="grid">
+        <section class="panel commercial-card">
+            <h2>账户</h2>
+            <div id="accountBox"></div>
+        </section>
+        <section class="panel commercial-card">
+            <h2>收益</h2>
+            <div class="metric" id="availableEarnings">0</div>
+            <div id="earningsBox"></div>
+        </section>
+        <section class="panel commercial-card">
+            <h2>积分</h2>
+            <div class="metric" id="totalPoints">0</div>
+            <div id="pointsBox"></div>
+        </section>
+    </div>
+    <section class="panel commercial-card">
+        <h2>钱包绑定</h2>
+        <div class="grid">
+            <input id="bindWalletAddress" placeholder="钱包地址 0x...">
+            <button id="bindNonceButton">获取绑定 nonce</button>
+            <input id="bindNonce" placeholder="nonce">
+            <input id="bindSignature" placeholder="签名">
+            <button id="bindWalletButton">绑定钱包</button>
+        </div>
+        <div id="bindMessage" class="wrap"></div>
+    </section>
+    <section class="panel commercial-card">
+        <h2>文件</h2>
+        <div id="filesBox"></div>
+    </section>
+    <section class="panel commercial-card">
+        <h2>分享</h2>
+        <div id="sharesBox"></div>
+    </section>
+    <section class="panel commercial-card">
+        <h2>提现</h2>
+        <div class="grid">
+            <input id="withdrawAmount" placeholder="提现金额">
+            <button id="withdrawButton">提交提现</button>
+        </div>
+        <div id="withdrawalsBox"></div>
+    </section>
+    <div class="modal-backdrop" id="shareCreateModal" hidden>
+        <section class="share-modal commercial-card" role="dialog" aria-modal="true" aria-labelledby="shareModalTitle">
+            <div class="modal-title">
+                <div>
+                    <h2 id="shareModalTitle">创建文件分享</h2>
+                    <div class="wrap" id="shareModalFileName"></div>
+                </div>
+                <button id="shareCloseButton" class="secondary" type="button">关闭</button>
+            </div>
+            <div class="share-form-grid">
+                <label class="full">文件 Hash
+                    <input id="shareFileHashInput" readonly>
+                </label>
+                <label>提取码
+                    <input id="shareExtractCodeInput" placeholder="默认自动生成">
+                </label>
+                <label>最大下载次数
+                    <input id="shareMaxDownloadsInput" type="number" min="0" value="0">
+                </label>
+                <label class="full">过期时间
+                    <input id="shareExpiresAtInput" type="datetime-local">
+                </label>
+            </div>
+            <div class="dialog-actions">
+                <button id="shareCreateButton" type="button">创建分享</button>
+            </div>
+            <div id="shareResultBox" class="share-result">分享链接会在创建后显示在这里。</div>
+        </section>
+    </div>
+    <script src="/static/user-dashboard.js"></script>
+    </div>
+    </main>
+    </div>
+</body>
+</html>

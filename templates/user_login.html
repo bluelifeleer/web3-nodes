@@ -1,0 +1,135 @@
+
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>用户登录</title>
+    <link rel="stylesheet" href="/static/user-login.css">
+</head>
+<body class="commercial-page user-login-page">
+    <div class="page-shell">
+    <nav class="modern-nav">
+        <div class="brand-lockup"><span class="brand-mark"></span><span>Web3 Nodes Store</span></div>
+        <div class="nav-actions"><a href="/">首页</a><a href="/user/dashboard">用户面板</a><a href="/user/upload">上传文件</a></div>
+    </nav>
+    <header class="page-hero">
+        <div>
+            <span class="page-kicker">用户中心</span>
+            <h1>进入你的文件分享与收益工作台</h1>
+            <p>账号、注册与钱包登录集中在一个页面，登录后即可上传文件、创建分享、查看积分和提现。</p>
+        </div>
+    </header>
+    <div class="login-product-layout">
+    <section class="login-value commercial-card">
+        <span class="page-kicker">商业化闭环</span>
+        <h2>从一次上传开始，连接分发、下载与收益</h2>
+        <p>适合私域资料分发、节点激励运营和文件商品化分享。用户登录后可以管理文件资产、分享链接与收益流水。</p>
+        <div class="value-list">
+            <div>可控分享：提取码、过期时间、下载次数限制。</div>
+            <div>收益记录：分享下载、节点贡献和积分流水统一追踪。</div>
+            <div>钱包能力：为后续链上身份和结算扩展保留入口。</div>
+        </div>
+    </section>
+    <div class="auth-shell commercial-card">
+        <div class="tabs" role="tablist" aria-label="登录方式">
+            <button type="button" class="tab active" data-auth-tab="login">账号登录</button>
+            <button type="button" class="tab" data-auth-tab="register">注册账号</button>
+            <button type="button" class="tab" data-auth-tab="wallet">钱包登录</button>
+            <button type="button" class="tab" id="otherLoginButton">其他方式登录</button>
+        </div>
+        <section class="panel auth-panel active" id="loginPanel" data-auth-panel="login">
+            <h2>账号登录</h2>
+            <form id="passwordLoginForm">
+                <label>用户名
+                    <input id="loginUsername" autocomplete="username" required>
+                </label>
+                <label>密码
+                    <input id="loginPassword" type="password" autocomplete="current-password" required>
+                </label>
+                <button type="submit">登录</button>
+            </form>
+        </section>
+        <section class="panel auth-panel" id="registerPanel" data-auth-panel="register">
+            <h2>注册</h2>
+            <form id="registerForm">
+                <label>用户名
+                    <input id="registerUsername" autocomplete="username" required>
+                </label>
+                <label>密码
+                    <input id="registerPassword" type="password" autocomplete="new-password" required>
+                </label>
+                <button type="submit">注册并登录</button>
+            </form>
+        </section>
+        <section class="panel auth-panel" id="walletPanel" data-auth-panel="wallet">
+            <h2>钱包登录</h2>
+            <form id="walletLoginForm">
+                <label>钱包地址
+                    <input id="walletAddress" placeholder="0x..." required>
+                </label>
+                <button type="button" class="secondary" id="nonceButton">获取登录 nonce</button>
+                <label>nonce
+                    <input id="walletNonce" required>
+                </label>
+                <label>签名
+                    <input id="walletSignature" required>
+                </label>
+                <div class="hint" id="walletMessage"></div>
+                <button type="submit">钱包登录</button>
+            </form>
+        </section>
+        <div class="other-login">
+            <div class="hint">其他方式登录</div>
+            <div class="other-login-grid">
+                <button type="button" class="secondary" data-other-login="phone">手机</button>
+                <button type="button" class="secondary" data-other-login="email">邮箱</button>
+                <button type="button" class="secondary" data-other-login="wechat">微信</button>
+                <button type="button" class="secondary" data-other-login="qq">QQ</button>
+            </div>
+        </div>
+    </div>
+    <div class="auth-modal" id="otherLoginModal" aria-hidden="true">
+        <div class="modal-panel" id="phoneLoginModal" data-login-modal="phone">
+            <div class="modal-title"><h2>手机号登录</h2><button type="button" class="secondary" data-close-modal>关闭</button></div>
+            <form id="phoneLoginForm">
+                <label>手机号
+                    <input id="phoneLoginIdentifier" inputmode="tel" autocomplete="tel" placeholder="13800000000" required>
+                </label>
+                <label>短信验证码
+                    <input id="phoneSmsCode" inputmode="numeric" autocomplete="one-time-code" required>
+                </label>
+                <button type="button" class="secondary" id="phoneSendCodeButton">发送短信验证码</button>
+                <button type="submit">手机登录</button>
+            </form>
+        </div>
+        <div class="modal-panel" id="emailLoginModal" data-login-modal="email">
+            <div class="modal-title"><h2>邮箱登录</h2><button type="button" class="secondary" data-close-modal>关闭</button></div>
+            <form id="emailLoginForm">
+                <label>邮箱
+                    <input id="emailLoginIdentifier" type="email" autocomplete="email" placeholder="name@163.com / gmail.com / outlook.com / icloud.com" required>
+                </label>
+                <label>邮箱验证码
+                    <input id="emailVerifyCode" inputmode="numeric" autocomplete="one-time-code" required>
+                </label>
+                <div class="hint">支持 163.com、gmail.com、outlook.com、icloud.com / Apple 邮箱账号作为登录名。</div>
+                <button type="button" class="secondary" id="emailSendCodeButton">发送邮箱验证码</button>
+                <button type="submit">邮箱登录</button>
+            </form>
+        </div>
+        <div class="modal-panel" id="wechatLoginModal" data-login-modal="wechat">
+            <div class="modal-title"><h2>微信登录</h2><button type="button" class="secondary" data-close-modal>关闭</button></div>
+            <div class="qr-box">微信登录二维码</div>
+            <div class="provider-note">微信开放平台接入位已预留。配置 AppID、AppSecret 和回调地址后即可启用扫码登录。</div>
+        </div>
+        <div class="modal-panel" id="qqLoginModal" data-login-modal="qq">
+            <div class="modal-title"><h2>QQ 登录</h2><button type="button" class="secondary" data-close-modal>关闭</button></div>
+            <div class="qr-box">QQ 登录二维码</div>
+            <div class="provider-note">QQ 互联接入位已预留。配置 APP ID、APP Key 和回调地址后即可启用授权登录。</div>
+        </div>
+    </div>
+    <pre id="statusBox" class="status">等待操作...</pre>
+    </div>
+    </div>
+    <script src="/static/user-login.js"></script>
+</body>
+</html>

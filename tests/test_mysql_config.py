@@ -97,6 +97,13 @@ def load_server_main(**env):
                 os.environ[key] = value
 
 
+def read_static_asset_or_empty(path):
+    asset_path = Path(path)
+    if not asset_path.exists():
+        return ""
+    return asset_path.read_text(encoding="utf-8")
+
+
 class MysqlConfigTest(unittest.TestCase):
     def test_password_hash_verification_accepts_correct_password(self):
         auth = importlib.import_module("auth")
@@ -1282,8 +1289,9 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertNotIn('id="adminTokenInput"', server_main.ADMIN_HTML)
         self.assertNotIn("saveAdminToken", server_main.ADMIN_HTML)
         self.assertNotIn("clearAdminToken", server_main.ADMIN_HTML)
+        admin_login_source = server_main.ADMIN_LOGIN_HTML + read_static_asset_or_empty("static/admin-login.js")
         self.assertIn('id="adminTokenInput"', server_main.ADMIN_LOGIN_HTML)
-        self.assertIn("/api/admin/login", server_main.ADMIN_LOGIN_HTML)
+        self.assertIn("/api/admin/login", admin_login_source)
 
     def test_admin_login_page_renders_token_login_form_without_database(self):
         server_main = load_server_main(ADMIN_API_TOKEN="secret-token")
@@ -1293,9 +1301,17 @@ class MysqlConfigTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         body = response.get_data(as_text=True)
+        admin_login_source = body + read_static_asset_or_empty("static/admin-login.js")
         self.assertIn("后台登录", body)
-        self.assertIn("/api/admin/login", body)
-        self.assertIn("admin_token", body)
+        self.assertIn('href="/static/admin-login.css"', body)
+        self.assertIn('src="/static/admin-login.js"', body)
+        self.assertIn("/api/admin/login", admin_login_source)
+        self.assertIn("admin_token", admin_login_source)
+        self.assertEqual(server_main.ADMIN_LOGIN_TEMPLATE, "admin_login.html")
+        self.assertTrue(Path("templates/admin_login.html").exists())
+        self.assertTrue(Path("static/admin-login.css").exists())
+        self.assertTrue(Path("static/admin-login.js").exists())
+        self.assertIn('id="adminTokenInput"', Path("templates/admin_login.html").read_text(encoding="utf-8"))
 
     def test_public_homepage_links_business_user_admin_and_node_flows(self):
         server_main = load_server_main(ADMIN_API_TOKEN="secret-token")
@@ -1321,6 +1337,33 @@ class MysqlConfigTest(unittest.TestCase):
             self.assertIn(path, body)
         self.assertNotIn('id="nodeTable"', body)
 
+    def test_server_main_delegates_runtime_pages_ipfs_and_node_helpers_to_flask_app_modules(self):
+        server_main = load_server_main(ADMIN_API_TOKEN="secret-token")
+        flask_app_package = importlib.import_module("app")
+        config_module = importlib.import_module("app.config")
+        routes_package = importlib.import_module("app.routes")
+        server_runtime = importlib.import_module("app.services.runtime")
+        server_pages = importlib.import_module("app.web.pages")
+        server_ipfs = importlib.import_module("app.services.ipfs")
+        server_nodes = importlib.import_module("app.services.nodes")
+        server_storage = importlib.import_module("app.services.storage")
+
+        self.assertIs(flask_app_package.create_app(), server_main.app)
+        self.assertIsInstance(server_main.SERVER_CONFIG, config_module.ServerConfig)
+        self.assertTrue(callable(routes_package.register_blueprints))
+        self.assertIs(server_main.ensure_runtime_secrets, server_runtime.ensure_runtime_secrets)
+        self.assertIs(server_main.parse_env_file_values, server_runtime.parse_env_file_values)
+        self.assertIs(server_main.HOME_HTML, server_pages.HOME_HTML)
+        self.assertIs(server_main.ADMIN_DASHBOARD_TEMPLATE, server_pages.ADMIN_DASHBOARD_TEMPLATE)
+        self.assertIs(server_main.get_ipfs_client, server_ipfs.get_ipfs_client)
+        self.assertIs(server_main.HttpIPFSClient, server_ipfs.HttpIPFSClient)
+        self.assertIs(server_main.format_node_record, server_nodes.format_node_record)
+        self.assertIs(server_main.build_leaderboard, server_nodes.build_leaderboard)
+        self.assertIs(server_main.build_invite_tree, server_nodes.build_invite_tree)
+        self.assertIs(server_main.validate_file_hash, server_storage.validate_file_hash)
+        self.assertIs(server_main.normalize_visibility, server_storage.normalize_visibility)
+        self.assertIs(server_main.build_encrypted_shard_manifest, server_storage.build_encrypted_shard_manifest)
+
     def test_admin_dashboard_is_available_at_admin_without_database(self):
         server_main = load_server_main(ADMIN_API_TOKEN="secret-token")
         server_main.init_db = lambda: self.fail("admin dashboard shell should not require database")
@@ -1329,11 +1372,22 @@ class MysqlConfigTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         body = response.get_data(as_text=True)
+        admin_assets = (
+            read_static_asset_or_empty("static/admin-dashboard.css")
+            + read_static_asset_or_empty("static/admin-dashboard.js")
+        )
         self.assertIn('id="nodeTable"', body)
         self.assertIn("/admin/login", body)
         self.assertIn("admin-node-grid", body)
-        self.assertIn("formatNodeStorage", body)
-        self.assertIn("node-storage-usage", body)
+        self.assertIn("node-storage-usage", body + admin_assets)
+        self.assertIn('href="/static/admin-dashboard.css"', body)
+        self.assertIn('src="/static/admin-dashboard.js"', body)
+        self.assertEqual(server_main.ADMIN_DASHBOARD_TEMPLATE, "admin_dashboard.html")
+        self.assertTrue(Path("templates/admin_dashboard.html").exists())
+        self.assertTrue(Path("static/admin-dashboard.css").exists())
+        self.assertTrue(Path("static/admin-dashboard.js").exists())
+        self.assertIn("id=\"nodeTable\"", Path("templates/admin_dashboard.html").read_text(encoding="utf-8"))
+        self.assertIn("formatNodeStorage", Path("static/admin-dashboard.js").read_text(encoding="utf-8"))
         for marker in (
             "unified-console-shell",
             "console-sidebar",
@@ -1361,10 +1415,30 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertIn('data-console-role="user"', user_body)
         self.assertIn("unified-console-shell", admin_body)
         self.assertIn("unified-console-shell", user_body)
-        self.assertIn("requireAdminLogin", admin_body)
-        self.assertIn("requireUserLogin", user_body)
-        self.assertIn("/api/node_list", admin_body)
-        self.assertIn("/api/user/files", user_body)
+        console_js = Path("static/console.js").read_text(encoding="utf-8")
+        self.assertIn("requireAdminLogin", console_js)
+        self.assertIn("requireUserLogin", console_js)
+        self.assertIn("/api/node_list", console_js)
+        self.assertIn("/api/user/files", console_js)
+
+    def test_unified_console_uses_split_template_and_static_assets(self):
+        server_main = load_server_main(ADMIN_API_TOKEN="secret-token", SESSION_SECRET="session-secret")
+        server_main.init_db = lambda: self.fail("console shell should not require database")
+        client = server_main.app.test_client()
+
+        response = client.get("/console?role=admin")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertEqual(server_main.MANAGEMENT_CONSOLE_TEMPLATE, "management_console.html")
+        self.assertIn('href="/static/console.css"', body)
+        self.assertIn('src="/static/console.js"', body)
+        self.assertNotIn("async function loadUserWorkspace", body)
+        self.assertTrue(Path("templates/management_console.html").exists())
+        self.assertTrue(Path("static/console.css").exists())
+        self.assertTrue(Path("static/console.js").exists())
+        self.assertIn("unified-console-shell", Path("static/console.css").read_text(encoding="utf-8"))
+        self.assertIn("loadUserWorkspace", Path("static/console.js").read_text(encoding="utf-8"))
 
     def test_admin_login_api_validates_token_without_admin_header(self):
         server_main = load_server_main(ADMIN_API_TOKEN="secret-token")
@@ -1382,19 +1456,27 @@ class MysqlConfigTest(unittest.TestCase):
         server_main = load_server_main(ADMIN_API_TOKEN="secret-token")
 
         self.assertIn("/admin/login", server_main.ADMIN_HTML)
-        self.assertIn('window.location.href = "/admin"', server_main.ADMIN_LOGIN_HTML)
-        self.assertIn("requireAdminLogin", server_main.ADMIN_HTML)
+        self.assertIn(
+            'window.location.href = "/admin"',
+            server_main.ADMIN_LOGIN_HTML + read_static_asset_or_empty("static/admin-login.js"),
+        )
+        self.assertIn(
+            "requireAdminLogin",
+            server_main.ADMIN_HTML + read_static_asset_or_empty("static/admin-dashboard.js"),
+        )
 
     def test_admin_page_auto_refreshes_dashboard_data(self):
         server_main = load_server_main(ADMIN_API_TOKEN="secret-token")
+        admin_js = read_static_asset_or_empty("static/admin-dashboard.js")
+        admin_source = server_main.ADMIN_HTML + admin_js
 
-        self.assertIn("ADMIN_REFRESH_INTERVAL_MS", server_main.ADMIN_HTML)
-        self.assertIn("startAdminAutoRefresh", server_main.ADMIN_HTML)
+        self.assertIn("ADMIN_REFRESH_INTERVAL_MS", admin_source)
+        self.assertIn("startAdminAutoRefresh", admin_source)
         self.assertIn('id="adminAutoRefreshStatus"', server_main.ADMIN_HTML)
-        self.assertIn("setInterval(refreshAdminData", server_main.ADMIN_HTML)
-        self.assertIn("getIpfsStatus();", server_main.ADMIN_HTML)
-        self.assertIn("DOMContentLoaded", server_main.ADMIN_HTML)
-        self.assertIn("const ADMIN_REFRESH_INTERVAL_MS = 10000", server_main.ADMIN_HTML)
+        self.assertIn("setInterval(refreshAdminData", admin_source)
+        self.assertIn("getIpfsStatus();", admin_source)
+        self.assertIn("DOMContentLoaded", admin_source)
+        self.assertIn("const ADMIN_REFRESH_INTERVAL_MS = 10000", admin_source)
 
     def test_admin_page_uses_configurable_map_key_with_fallback(self):
         server_main = load_server_main(ADMIN_API_TOKEN="secret-token")
@@ -1404,10 +1486,11 @@ class MysqlConfigTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         body = response.get_data(as_text=True)
+        admin_source = body + read_static_asset_or_empty("static/admin-dashboard.js")
         self.assertNotIn("6f17f9896974a8686929496921212479", body)
         self.assertNotIn("webapi.amap.com/maps?v=2.0&key=", body)
-        self.assertIn("AMAP_WEB_KEY", body)
-        self.assertIn("renderMapFallback", body)
+        self.assertIn("AMAP_WEB_KEY", admin_source)
+        self.assertIn("renderMapFallback", admin_source)
         self.assertIn('id="nodeDistributionFallback"', body)
 
     def test_admin_page_does_not_load_amap_when_security_jscode_is_missing(self):
@@ -1418,9 +1501,10 @@ class MysqlConfigTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         body = response.get_data(as_text=True)
+        admin_source = body + read_static_asset_or_empty("static/admin-dashboard.js")
         self.assertNotIn("webapi.amap.com/maps?v=2.0&key=valid-map-key", body)
-        self.assertIn("AMAP_SECURITY_JSCODE", body)
-        self.assertIn("renderMapFallback", body)
+        self.assertIn("AMAP_SECURITY_JSCODE", admin_source)
+        self.assertIn("renderMapFallback", admin_source)
 
     def test_admin_page_loads_amap_with_security_jscode_when_configured(self):
         server_main = load_server_main(
@@ -1462,7 +1546,10 @@ class MysqlConfigTest(unittest.TestCase):
         login = client.get("/user/login").get_data(as_text=True)
 
         self.assertEqual(homepage.count(":root{--ink"), 1)
-        for body in (homepage, admin, admin_login, login):
+        admin_source = admin + read_static_asset_or_empty("static/admin-dashboard.css")
+        admin_login_source = admin_login + read_static_asset_or_empty("static/admin-login.css")
+        login_source = login + read_static_asset_or_empty("static/user-login.css")
+        for body in (homepage, admin_source, admin_login_source, login_source):
             self.assertIn("premium-button", body)
             self.assertIn("button-shine", body)
             self.assertIn("hover-lift", body)
@@ -1606,15 +1693,16 @@ class MysqlConfigTest(unittest.TestCase):
 
     def test_admin_page_renders_capacity_and_withdrawal_sections(self):
         server_main = load_server_main(ADMIN_API_TOKEN="secret-token")
+        admin_source = server_main.ADMIN_HTML + read_static_asset_or_empty("static/admin-dashboard.js")
 
         self.assertIn("总容量", server_main.ADMIN_HTML)
         self.assertIn("可用容量", server_main.ADMIN_HTML)
         self.assertIn("提现申请", server_main.ADMIN_HTML)
-        self.assertIn("getAdminWithdrawals", server_main.ADMIN_HTML)
-        self.assertIn("reviewWithdrawal", server_main.ADMIN_HTML)
-        self.assertIn("escHtml(item.storage_status", server_main.ADMIN_HTML)
-        self.assertIn("withdrawalNoteDrafts", server_main.ADMIN_HTML)
-        self.assertIn("document.activeElement", server_main.ADMIN_HTML)
+        self.assertIn("getAdminWithdrawals", admin_source)
+        self.assertIn("reviewWithdrawal", admin_source)
+        self.assertIn("escHtml(item.storage_status", admin_source)
+        self.assertIn("withdrawalNoteDrafts", admin_source)
+        self.assertIn("document.activeElement", admin_source)
 
     def test_admin_storage_audit_api_filters_and_formats_rows(self):
         server_main = load_server_main(ADMIN_API_TOKEN="secret-token")
@@ -1703,6 +1791,7 @@ class MysqlConfigTest(unittest.TestCase):
 
     def test_admin_page_renders_storage_audit_section(self):
         server_main = load_server_main(ADMIN_API_TOKEN="secret-token")
+        admin_source = server_main.ADMIN_HTML + read_static_asset_or_empty("static/admin-dashboard.js")
 
         for marker in (
             "存储审计日志",
@@ -1713,7 +1802,7 @@ class MysqlConfigTest(unittest.TestCase):
             "auditFileHashFilter",
             "auditNodeFilter",
         ):
-            self.assertIn(marker, server_main.ADMIN_HTML)
+            self.assertIn(marker, admin_source)
 
     def test_auto_settle_reward_uses_daily_snapshot_key(self):
         server_main = load_server_main()
@@ -2556,6 +2645,10 @@ class MysqlConfigTest(unittest.TestCase):
                 self.assertIn(state["csrf_token"], html)
                 self.assertIn('id="storageQuotaInput"', html)
                 self.assertIn('id="storageDirectoryList"', html)
+                self.assertIn('id="autoRefreshState"', html)
+                self.assertIn("CLIENT_CONSOLE_REFRESH_INTERVAL_MS", html)
+                self.assertIn("setInterval(refreshAll, CLIENT_CONSOLE_REFRESH_INTERVAL_MS)", html)
+                self.assertIn('document.addEventListener("visibilitychange"', html)
 
                 with urllib.request.urlopen(f"{base_url}/api/status?x=1", timeout=5) as response:
                     status_payload = json.loads(response.read().decode("utf-8"))
@@ -2616,6 +2709,60 @@ class MysqlConfigTest(unittest.TestCase):
                 thread.join(timeout=5)
         finally:
             sys.modules.pop("client", None)
+            if old_requests is None:
+                sys.modules.pop("requests", None)
+            else:
+                sys.modules["requests"] = old_requests
+            if old_webview is None:
+                sys.modules.pop("webview", None)
+            else:
+                sys.modules["webview"] = old_webview
+
+    def test_client_console_page_lives_in_dedicated_module(self):
+        old_requests = sys.modules.get("requests")
+        old_webview = sys.modules.get("webview")
+        try:
+            sys.modules["requests"] = types.SimpleNamespace(post=lambda *args, **kwargs: None, get=lambda *args, **kwargs: None)
+            sys.modules["webview"] = None
+            sys.modules.pop("client", None)
+            sys.modules.pop("client_console", None)
+            client_module = importlib.import_module("client")
+            console_module = importlib.import_module("client_console")
+
+            self.assertIs(client_module.CLIENT_MANAGE_HTML, console_module.CLIENT_MANAGE_HTML)
+            self.assertIn('id="autoRefreshState"', console_module.CLIENT_MANAGE_HTML)
+            self.assertIn("csrf-token-demo", console_module.render_client_console_html("csrf-token-demo"))
+        finally:
+            sys.modules.pop("client", None)
+            sys.modules.pop("client_console", None)
+            if old_requests is None:
+                sys.modules.pop("requests", None)
+            else:
+                sys.modules["requests"] = old_requests
+            if old_webview is None:
+                sys.modules.pop("webview", None)
+            else:
+                sys.modules["webview"] = old_webview
+
+    def test_client_config_helpers_live_in_dedicated_module(self):
+        old_requests = sys.modules.get("requests")
+        old_webview = sys.modules.get("webview")
+        try:
+            sys.modules["requests"] = types.SimpleNamespace(post=lambda *args, **kwargs: None, get=lambda *args, **kwargs: None)
+            sys.modules["webview"] = None
+            sys.modules.pop("client", None)
+            sys.modules.pop("client_config", None)
+            client_module = importlib.import_module("client")
+            config_module = importlib.import_module("client_config")
+
+            self.assertIs(client_module.load_client_config, config_module.load_client_config)
+            self.assertIs(client_module.get_invite_arg, config_module.get_invite_arg)
+            self.assertIs(client_module.get_storage_dir_arg, config_module.get_storage_dir_arg)
+            self.assertIs(client_module.get_manage_port_arg, config_module.get_manage_port_arg)
+            self.assertIs(client_module.get_storage_quota_arg, config_module.get_storage_quota_arg)
+        finally:
+            sys.modules.pop("client", None)
+            sys.modules.pop("client_config", None)
             if old_requests is None:
                 sys.modules.pop("requests", None)
             else:
@@ -3967,19 +4114,27 @@ class MysqlConfigTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         body = response.get_data(as_text=True)
-        self.assertIn("/api/user/files", body)
-        self.assertIn('/api/user/files/${encodeURIComponent(fileHash)}/shares', body)
-        self.assertIn("/s/", body)
-        self.assertIn("Authorization", body)
-        self.assertIn("user_token", body)
-        self.assertIn("requireUserLogin", body)
-        self.assertIn("redirectToLogin", body)
-        self.assertIn('searchParams.set("next"', body)
-        self.assertIn('window.location.href = loginUrl.toString()', body)
-        self.assertIn("generateDefaultExtractCode", body)
-        self.assertIn("defaultExtractCodeTouched", body)
-        self.assertIn("share_url_with_extract_code", body)
-        self.assertIn('target="_blank"', body)
+        upload_source = body + read_static_asset_or_empty("static/user-upload.js")
+        self.assertIn('href="/static/user-upload.css"', body)
+        self.assertIn('src="/static/user-upload.js"', body)
+        self.assertIn("/api/user/files", upload_source)
+        self.assertIn('/api/user/files/${encodeURIComponent(fileHash)}/shares', upload_source)
+        self.assertIn("/s/", upload_source)
+        self.assertIn("Authorization", upload_source)
+        self.assertIn("user_token", upload_source)
+        self.assertIn("requireUserLogin", upload_source)
+        self.assertIn("redirectToLogin", upload_source)
+        self.assertIn('searchParams.set("next"', upload_source)
+        self.assertIn('window.location.href = loginUrl.toString()', upload_source)
+        self.assertIn("generateDefaultExtractCode", upload_source)
+        self.assertIn("defaultExtractCodeTouched", upload_source)
+        self.assertIn("share_url_with_extract_code", upload_source)
+        self.assertIn('target="_blank"', upload_source)
+        self.assertEqual(server_main.USER_UPLOAD_TEMPLATE, "user_upload.html")
+        self.assertTrue(Path("templates/user_upload.html").exists())
+        self.assertTrue(Path("static/user-upload.css").exists())
+        self.assertTrue(Path("static/user-upload.js").exists())
+        self.assertIn("generateDefaultExtractCode", Path("static/user-upload.js").read_text(encoding="utf-8"))
 
     def test_user_login_page_renders_forms_and_token_storage(self):
         server_main = load_server_main(SESSION_SECRET="session-secret")
@@ -3989,6 +4144,7 @@ class MysqlConfigTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         body = response.get_data(as_text=True)
+        login_source = body + read_static_asset_or_empty("static/user-login.js")
         self.assertIn("钱包登录", body)
         for marker in (
             'data-auth-tab="login"',
@@ -4013,12 +4169,15 @@ class MysqlConfigTest(unittest.TestCase):
             '发送邮箱验证码',
             '微信登录二维码',
             'QQ 登录二维码',
+        ):
+            self.assertIn(marker, body)
+        for marker in (
             "switchAuthTab",
             "openOtherLoginModal",
             "redirectAfterLogin",
             "URLSearchParams",
         ):
-            self.assertIn(marker, body)
+            self.assertIn(marker, login_source)
         for marker in (
             'data-auth-tab="phone"',
             'data-auth-tab="email"',
@@ -4028,11 +4187,18 @@ class MysqlConfigTest(unittest.TestCase):
             self.assertNotIn(marker, body)
         for provider in ("163.com", "gmail.com", "outlook.com", "icloud.com"):
             self.assertIn(provider, body)
-        self.assertIn("/api/auth/register", body)
-        self.assertIn("/api/auth/login", body)
-        self.assertIn("/api/wallet/login", body)
-        self.assertIn("saveSession(payload, true)", body)
-        self.assertIn('localStorage.setItem("user_token"', body)
+        self.assertIn('href="/static/user-login.css"', body)
+        self.assertIn('src="/static/user-login.js"', body)
+        self.assertIn("/api/auth/register", login_source)
+        self.assertIn("/api/auth/login", login_source)
+        self.assertIn("/api/wallet/login", login_source)
+        self.assertIn("saveSession(payload, true)", login_source)
+        self.assertIn('localStorage.setItem("user_token"', login_source)
+        self.assertEqual(server_main.USER_LOGIN_TEMPLATE, "user_login.html")
+        self.assertTrue(Path("templates/user_login.html").exists())
+        self.assertTrue(Path("static/user-login.css").exists())
+        self.assertTrue(Path("static/user-login.js").exists())
+        self.assertIn('id="otherLoginModal"', Path("templates/user_login.html").read_text(encoding="utf-8"))
 
     def test_user_dashboard_page_uses_user_product_apis(self):
         server_main = load_server_main(SESSION_SECRET="session-secret")
@@ -4042,6 +4208,8 @@ class MysqlConfigTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         body = response.get_data(as_text=True)
+        static_js_path = Path("static/user-dashboard.js")
+        dashboard_source = body + (static_js_path.read_text(encoding="utf-8") if static_js_path.exists() else "")
         for api_path in (
             "/api/auth/me",
             "/api/user/files",
@@ -4050,23 +4218,30 @@ class MysqlConfigTest(unittest.TestCase):
             "/api/user/earnings",
             "/api/user/withdrawals",
         ):
-            self.assertIn(api_path, body)
-        self.assertIn("user_token", body)
-        self.assertIn("createShareForFile", body)
-        self.assertIn("defaultExtractCodeForFile", body)
-        self.assertNotIn("prompt(", body)
+            self.assertIn(api_path, dashboard_source)
+        self.assertIn('href="/static/user-dashboard.css"', body)
+        self.assertIn('src="/static/user-dashboard.js"', body)
+        self.assertIn("user_token", dashboard_source)
+        self.assertIn("createShareForFile", dashboard_source)
+        self.assertIn("defaultExtractCodeForFile", dashboard_source)
+        self.assertNotIn("prompt(", dashboard_source)
         for marker in (
             'id="shareCreateModal"',
-            "openShareDialog",
-            "closeShareDialog",
             'id="shareFileHashInput"',
             'id="shareExtractCodeInput"',
             'id="shareResultBox"',
             'id="shareCreateButton"',
         ):
             self.assertIn(marker, body)
-        self.assertIn('/api/user/files/${encodeURIComponent(fileHash)}/shares', body)
-        self.assertIn('target="_blank"', body)
+        for marker in ("openShareDialog", "closeShareDialog"):
+            self.assertIn(marker, dashboard_source)
+        self.assertIn('/api/user/files/${encodeURIComponent(fileHash)}/shares', dashboard_source)
+        self.assertIn('target="_blank"', dashboard_source)
+        self.assertEqual(server_main.USER_DASHBOARD_TEMPLATE, "user_dashboard.html")
+        self.assertTrue(Path("templates/user_dashboard.html").exists())
+        self.assertIn('id="shareCreateModal"', Path("templates/user_dashboard.html").read_text(encoding="utf-8"))
+        self.assertTrue(Path("static/user-dashboard.css").exists())
+        self.assertTrue(static_js_path.exists())
 
     def test_public_share_page_downloads_with_inline_extract_code(self):
         server_main = load_server_main(SESSION_SECRET="session-secret")
@@ -4076,11 +4251,19 @@ class MysqlConfigTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         body = response.get_data(as_text=True)
+        share_source = body + read_static_asset_or_empty("static/public-share.js")
         self.assertIn("下载", body)
         self.assertIn("/api/share/demo-share", body)
-        self.assertIn("/api/share/${encodeURIComponent(shareCode)}/download", body)
-        self.assertIn("extract_code", body)
-        self.assertIn('new URLSearchParams(window.location.search).get("extract_code")', body)
+        self.assertIn('href="/static/public-share.css"', body)
+        self.assertIn('src="/static/public-share.js"', body)
+        self.assertIn("/api/share/${encodeURIComponent(shareCode)}/download", share_source)
+        self.assertIn("extract_code", share_source)
+        self.assertIn('new URLSearchParams(window.location.search).get("extract_code")', share_source)
+        self.assertEqual(server_main.PUBLIC_SHARE_TEMPLATE, "public_share.html")
+        self.assertTrue(Path("templates/public_share.html").exists())
+        self.assertTrue(Path("static/public-share.css").exists())
+        self.assertTrue(Path("static/public-share.js").exists())
+        self.assertIn('shareCode: {{ share_code|tojson }}', Path("templates/public_share.html").read_text(encoding="utf-8"))
 
     def test_user_files_list_selects_only_current_owner(self):
         auth = importlib.import_module("auth")

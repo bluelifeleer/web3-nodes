@@ -1,0 +1,34 @@
+
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>后台登录</title>
+    <link rel="stylesheet" href="/static/admin-login.css">
+</head>
+<body class="commercial-page admin-login-page">
+    <div class="login-shell">
+        <nav class="modern-nav">
+            <div class="brand-lockup"><span class="brand-mark"></span><span>Web3 Nodes Store</span></div>
+            <div class="nav-actions"><a href="/">首页</a><a href="/admin">后台</a></div>
+        </nav>
+        <div class="auth-layout">
+            <section class="login-copy commercial-card">
+                <span class="page-kicker">运营后台</span>
+                <h1>安全进入节点与收益运营中心</h1>
+                <p>统一管理节点在线状态、文件分发、下载记录、积分流水与提现审核。登录后后台会自动加载并刷新核心数据。</p>
+            </section>
+    <main class="auth-card commercial-card">
+        <h1>后台登录</h1>
+        <form id="adminLoginForm">
+            <label for="adminTokenInput">后台 Token</label>
+            <input type="password" id="adminTokenInput" autocomplete="current-password" placeholder="请输入 ADMIN_API_TOKEN" required>
+            <button type="submit">登录后台</button>
+        </form>
+        <div id="loginStatus" class="status"></div>
+    </main>
+        </div>
+    </div>
+    <script src="/static/admin-login.js"></script>
+</body>
+</html>

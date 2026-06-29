@@ -16,6 +16,14 @@ http://127.0.0.1:8000
 
 默认推荐 PostgreSQL，同时保留 MySQL 兼容。
 
+## 工程归档
+
+本轮管理台拆分、客户端控制台动态刷新、Python 模块拆分和验证记录见：
+
+```text
+docs/engineering/2026-06-29-console-modularization-archive.md
+```
+
 ## 1. 环境准备
 
 需要安装：
