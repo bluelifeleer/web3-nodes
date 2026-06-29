@@ -13,12 +13,9 @@ import re
 import secrets
 import urllib.parse
 import base64
-import auth
-import points
-import shares
-import withdrawals
 from decimal import Decimal, InvalidOperation
-from files import USER_FILE_SELECT_PROJECTION, format_user_file_record
+from app.services.files import USER_FILE_SELECT_PROJECTION, format_user_file_record
+import app.services.withdrawals as withdrawals
 try:
     from Crypto.Cipher import AES
 except ImportError:
@@ -31,9 +28,9 @@ try:
     import reedsolo
 except ImportError:
     reedsolo = None
-import db as database_module
+import app.database as database_module
 from app.config import ServerConfig
-from db import (
+from app.database import (
     BASE_DIR,
     DB_CONFIG,
     DB_ENGINE,
@@ -62,6 +59,9 @@ from app.routes.pages import (
     user_login_page,
     user_upload_page,
 )
+import app.services.auth as auth
+import app.services.points as points
+import app.services.shares as shares
 from app.services.runtime import (
     RUNTIME_SECRET_KEYS,
     ensure_runtime_secrets,
@@ -114,7 +114,12 @@ from app.services.storage import (
 )
 
 # ==================== 初始化Flask服务 ====================
-app = Flask(__name__)
+app = Flask(
+    __name__,
+    template_folder=str(BASE_DIR / "app" / "templates"),
+    static_folder=str(BASE_DIR / "app" / "static"),
+    static_url_path="/static",
+)
 
 if os.getenv("WEB3_NODES_SKIP_DOTENV") != "1":
     ensure_runtime_secrets()
@@ -350,6 +355,8 @@ def require_user(view):
 
 @app.before_request
 def require_database_for_api():
+    if request.endpoint == "static":
+        return None
     if request.path in ADMIN_PUBLIC_PATHS:
         return None
     if is_admin_protected_path(request.path) and not admin_token_is_valid():

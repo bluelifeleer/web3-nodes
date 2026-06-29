@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <title>Web3节点激励后台面板</title>
-    <link rel="stylesheet" href="/static/admin-dashboard.css">
+    <link rel="stylesheet" href="/static/css/admin-dashboard.css">
     {% if amap_web_key and amap_security_jscode %}
     <script type="text/javascript">
         window._AMapSecurityConfig = { securityJsCode: {{ amap_security_jscode|tojson }} };
@@ -213,6 +213,7 @@
         amapWebKey: {{ (amap_web_key or "")|tojson }}
     };
 </script>
-<script src="/static/admin-dashboard.js"></script>
+<script src="/static/js/admin-dashboard.js"></script>
 </body>
 </html>
+

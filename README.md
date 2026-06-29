@@ -80,8 +80,8 @@ MAX_UPLOAD_MB=100
 
 说明：
 
-- `DB_ENGINE=postgresql` 时使用 `init_postgresql.sql`。
-- `DB_ENGINE=mysql` 时使用 `init_mysql.sql`。
+- `DB_ENGINE=postgresql` 时使用 `app/schema/init_postgresql.sql`。
+- `DB_ENGINE=mysql` 时使用 `app/schema/init_mysql.sql`。
 - `ADMIN_API_TOKEN` 用于后台登录。
 - `SESSION_SECRET` 用于用户登录 Token。
 - `AES_KEY` 当前代码使用 AES，需要 16 字节字符串；自动生成时会生成可用长度。
@@ -94,19 +94,19 @@ MAX_UPLOAD_MB=100
 
 启动服务端时会自动执行：
 
-- PostgreSQL：检查并创建 `POSTGRES_DB_NAME`，再执行 `init_postgresql.sql`。
-- MySQL：连接 MySQL 后执行 `init_mysql.sql`。
+- PostgreSQL：检查并创建 `POSTGRES_DB_NAME`，再执行 `app/schema/init_postgresql.sql`。
+- MySQL：连接 MySQL 后执行 `app/schema/init_mysql.sql`。
 
 只有启动失败或排查数据库权限时，才需要手动执行：
 
 ```powershell
-psql -h 127.0.0.1 -p 5432 -U postgres -d web3_modes_store -f init_postgresql.sql
+psql -h 127.0.0.1 -p 5432 -U postgres -d web3_modes_store -f app/schema/init_postgresql.sql
 ```
 
 或：
 
 ```powershell
-mysql -h 127.0.0.1 -P 3306 -u root -p < init_mysql.sql
+mysql -h 127.0.0.1 -P 3306 -u root -p < app/schema/init_mysql.sql
 ```
 
 ## 4. 启动 IPFS
@@ -217,7 +217,7 @@ http://127.0.0.1:8000/admin
 
 后台管理上传仍走原后台 Token 流程：
 
-- 静态上传页：`/upload.html`
+- 旧静态上传/下载页已归档到 `app/templates/upload.html`、`app/templates/download.html`，样式和脚本位于 `app/static/css/`、`app/static/js/`；当前推荐使用 `/user/upload`。
 - 上传接口：`/api/upload_file`
 - 需要后台 Token 鉴权
 
@@ -362,7 +362,7 @@ GET /api/share/<share_code>/download
 复制节点配置：
 
 ```powershell
-copy node_config.example.json node_config.json
+copy client\node_config.example.json node_config.json
 ```
 
 示例配置：
@@ -384,7 +384,7 @@ copy node_config.example.json node_config.json
 推荐启动方式：
 
 ```powershell
-python client.py --storage-dir=D:\web3-node-data --storage-quota-gb=100 --manage-port=8787
+python -m client.main --storage-dir=D:\web3-node-data --storage-quota-gb=100 --manage-port=8787
 ```
 
 也可以写入 `node_config.json`：
@@ -402,7 +402,7 @@ python client.py --storage-dir=D:\web3-node-data --storage-quota-gb=100 --manage
 ```powershell
 $env:NODE_STORAGE_DIR="D:\web3-node-data"
 $env:NODE_STORAGE_QUOTA_GB="100"
-python client.py
+python -m client.main
 ```
 
 配置后客户端会自动创建目录锁和隐藏存储根：
@@ -470,7 +470,7 @@ GET /api/admin/audit/storage/export?format=csv
 - 本地管理页的浏览器操作始终调用本地 `127.0.0.1` 接口，再由客户端代理访问服务端节点 API。
 - `/api/storage` 更新目录后会立即重新检测，并把新的目录状态用于后续容量上报。
 - `停止节点` 会把客户端切换为停止状态，后续心跳循环会结束；默认不会直接强杀当前 Python 进程。
-- `重启节点` 当前只返回“开发模式暂不支持自动重启，请手动重新运行 client.py”，避免误触发危险的进程替换。
+- `重启节点` 当前只返回“开发模式暂不支持自动重启，请手动重新运行 python -m client.main”，避免误触发危险的进程替换。
 - 客户端默认不再自动打开 pywebview 地图窗口，避免 Windows WebView 临时数据目录被占用时出现清理警告；确实需要地图窗口时，先配置 `AMAP_WEB_KEY`、`AMAP_SECURITY_JSCODE`，再设置 `$env:NODE_OPEN_MAP_WINDOW="1"` 后启动客户端。
 
 正常输出类似：
@@ -491,13 +491,13 @@ Web3分布式存储激励节点启动成功
 客户端支持通过启动参数指定上级邀请码：
 
 ```powershell
-python client.py invite=你的邀请码
+python -m client.main invite=你的邀请码
 ```
 
 或：
 
 ```powershell
-python client.py --invite=你的邀请码
+python -m client.main --invite=你的邀请码
 ```
 
 也可以在 `node_config.json` 中配置：
@@ -516,7 +516,7 @@ $env:NODE_PARENT_INVITE="你的邀请码"
 $env:NODE_HEARTBEAT_INTERVAL="60"
 $env:NODE_RECONNECT_INTERVAL="10"
 $env:NODE_STORAGE_DIR="D:\web3-node-data"
-python client.py
+python -m client.main
 ```
 
 ## 12. IPFS 安装

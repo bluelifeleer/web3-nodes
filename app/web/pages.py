@@ -1,5 +1,6 @@
 from pathlib import Path
 
+TEMPLATE_DIR = Path(__file__).resolve().parents[1] / "templates"
 
 COMMERCIAL_PAGE_CSS = '''
         :root{--ink:#172033;--muted:#64748b;--line:#dbe6ef;--surface:#fff;--soft:#f6f9fc;--brand:#0f766e;--brand-2:#14b8a6;--accent:#f0b429;--hot:#ff6b6b;}
@@ -215,20 +216,20 @@ HOME_HTML = '''
 '''
 
 ADMIN_LOGIN_TEMPLATE = "admin_login.html"
-ADMIN_LOGIN_HTML = (Path("templates") / ADMIN_LOGIN_TEMPLATE).read_text(encoding="utf-8")
+ADMIN_LOGIN_HTML = (TEMPLATE_DIR / ADMIN_LOGIN_TEMPLATE).read_text(encoding="utf-8")
 
 ADMIN_DASHBOARD_TEMPLATE = "admin_dashboard.html"
-ADMIN_HTML = (Path("templates") / ADMIN_DASHBOARD_TEMPLATE).read_text(encoding="utf-8")
+ADMIN_HTML = (TEMPLATE_DIR / ADMIN_DASHBOARD_TEMPLATE).read_text(encoding="utf-8")
 
 USER_UPLOAD_TEMPLATE = "user_upload.html"
-USER_UPLOAD_HTML = (Path("templates") / USER_UPLOAD_TEMPLATE).read_text(encoding="utf-8")
+USER_UPLOAD_HTML = (TEMPLATE_DIR / USER_UPLOAD_TEMPLATE).read_text(encoding="utf-8")
 
 USER_LOGIN_TEMPLATE = "user_login.html"
-USER_LOGIN_HTML = (Path("templates") / USER_LOGIN_TEMPLATE).read_text(encoding="utf-8")
+USER_LOGIN_HTML = (TEMPLATE_DIR / USER_LOGIN_TEMPLATE).read_text(encoding="utf-8")
 
 USER_DASHBOARD_TEMPLATE = "user_dashboard.html"
-USER_DASHBOARD_HTML = (Path("templates") / USER_DASHBOARD_TEMPLATE).read_text(encoding="utf-8")
+USER_DASHBOARD_HTML = (TEMPLATE_DIR / USER_DASHBOARD_TEMPLATE).read_text(encoding="utf-8")
 
 PUBLIC_SHARE_TEMPLATE = "public_share.html"
-PUBLIC_SHARE_HTML = (Path("templates") / PUBLIC_SHARE_TEMPLATE).read_text(encoding="utf-8")
+PUBLIC_SHARE_HTML = (TEMPLATE_DIR / PUBLIC_SHARE_TEMPLATE).read_text(encoding="utf-8")
 

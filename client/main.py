@@ -21,14 +21,14 @@ try:
     import webview
 except Exception:
     webview = None
-from client_config import (
+from client.config import (
     get_invite_arg,
     get_manage_port_arg,
     get_storage_dir_arg,
     get_storage_quota_arg,
     load_client_config,
 )
-from client_console import CLIENT_MANAGE_HTML, render_client_console_html
+from client.console import CLIENT_MANAGE_HTML, render_client_console_html
 
 # 服务端地址（和后端统一）
 SERVER_URL = "http://127.0.0.1:8000"
@@ -608,10 +608,10 @@ def stop_client_from_console(state):
 
 
 def restart_client_from_console(state):
-    state["last_notice"] = "开发模式暂不支持自动重启，请手动重新运行 client.py"
+    state["last_notice"] = "开发模式暂不支持自动重启，请手动重新运行 python -m client.main"
     return {
         "ok": True,
-        "message": "开发模式暂不支持自动重启，请手动重新运行 client.py",
+        "message": "开发模式暂不支持自动重启，请手动重新运行 python -m client.main",
         "data": client_status_payload(state),
     }
 
@@ -1103,13 +1103,19 @@ def open_map_window():
 def should_open_map_window():
     return webview is not None and os.getenv("NODE_OPEN_MAP_WINDOW", "").strip().lower() in ("1", "true", "yes", "on")
 
-if __name__ == "__main__":
+
+def main():
     import threading
+
     safe_print("🚀 Web3分布式存储激励节点启动成功")
     if should_open_map_window():
-        threading.Thread(target=client_run,daemon=True).start()
+        threading.Thread(target=client_run, daemon=True).start()
         open_map_window()
     else:
         if webview is not None:
             safe_print("ℹ️ 默认不自动打开 pywebview 地图窗口；如需地图请设置 NODE_OPEN_MAP_WINDOW=1")
         client_run()
+
+
+if __name__ == "__main__":
+    main()

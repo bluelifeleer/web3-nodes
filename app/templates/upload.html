@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Web3分布式存储 | 文件加密分片上链上传</title>
+    <link rel="stylesheet" href="/static/css/upload.css">
+</head>
+<body>
+    <div class="upload-box">
+        <h2>🌐 分布式加密存储 · 文件上链存证</h2>
+        <p class="tip-text">文件本地AES加密 | 碎片化分布式存储 | IPFS全网存证 | 哈希不可篡改上链</p>
+        
+        <div class="file-input-box" id="fileBox">
+            <p>点击选择文件 / 拖拽文件至此上传</p>
+            <input type="file" id="fileInput">
+        </div>
+
+        <div class="visibility-control">
+            <label class="visibility-label">访问权限：</label>
+            <select id="visibilitySelect" class="visibility-select">
+                <option value="public">公开下载</option>
+                <option value="private">私有下载（凭访问令牌）</option>
+            </select>
+        </div>
+
+        <button class="upload-btn" id="uploadBtn" disabled>立即加密上链上传</button>
+
+        <div class="progress-box" id="progressBox">
+            <p class="progress-label">上传进度：<span id="progressText">0%</span></p>
+            <div class="progress-bar">
+                <div class="progress-inner" id="progressInner"></div>
+            </div>
+        </div>
+
+        <div class="result-box" id="resultBox">
+            <p class="result-item"><span class="label">上传状态：</span><span id="statusText"></span></p>
+            <p class="result-item"><span class="label">文件名称：</span><span id="fileName"></span></p>
+            <p class="result-item"><span class="label">文件哈希(上链存证)：</span><span id="fileHash"></span></p>
+            <p class="result-item"><span class="label">IPFS唯一CID：</span><span id="ipfsCid"></span></p>
+            <p class="result-item"><span class="label">加密分片数量：</span><span id="shardNum"></span></p>
+            <p class="result-item"><span class="label">分布式存储节点数：</span><span id="nodeNum"></span></p>
+            <p class="result-item"><span class="label">访问权限：</span><span id="visibilityText"></span></p>
+            <p class="result-item"><span class="label">访问令牌：</span><span id="accessToken"></span></p>
+            <p class="result-item"><span class="label">下载链接：</span><a id="downloadUrl" class="download-link" href="#" target="_blank"></a></p>
+        </div>
+    </div>
+
+    <script src="/static/js/upload.js"></script>
+</body>
+</html>
+

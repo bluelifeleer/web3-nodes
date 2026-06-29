@@ -9,7 +9,7 @@ except ImportError:
     psycopg = None
 
 
-BASE_DIR = Path(__file__).resolve().parent
+BASE_DIR = Path(__file__).resolve().parent.parent
 
 
 def load_env_file(env_path=None):
@@ -71,7 +71,8 @@ def build_db_config():
 
 
 DB_CONFIG = build_db_config()
-INIT_SQL_PATH = BASE_DIR / ("init_mysql.sql" if DB_ENGINE == "mysql" else "init_postgresql.sql")
+SCHEMA_DIR = BASE_DIR / "app" / "schema"
+INIT_SQL_PATH = SCHEMA_DIR / ("init_mysql.sql" if DB_ENGINE == "mysql" else "init_postgresql.sql")
 db_error = ""
 
 

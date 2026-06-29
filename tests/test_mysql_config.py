@@ -47,6 +47,7 @@ def load_server_main(**env):
     old_psycopg = sys.modules.get("psycopg")
     old_requests = sys.modules.get("requests")
     old_db = sys.modules.get("db")
+    old_app_database = sys.modules.get("app.database")
 
     class FakeResponse:
         def json(self):
@@ -72,8 +73,13 @@ def load_server_main(**env):
         )
         sys.modules.pop("server_main", None)
         sys.modules.pop("db", None)
+        sys.modules.pop("app.database", None)
         return importlib.import_module("server_main")
     finally:
+        if old_app_database is None:
+            sys.modules.pop("app.database", None)
+        else:
+            sys.modules["app.database"] = old_app_database
         if old_db is None:
             sys.modules.pop("db", None)
         else:
@@ -106,7 +112,7 @@ def read_static_asset_or_empty(path):
 
 class MysqlConfigTest(unittest.TestCase):
     def test_password_hash_verification_accepts_correct_password(self):
-        auth = importlib.import_module("auth")
+        auth = importlib.import_module("app.services.auth")
 
         password_hash = auth.hash_password("secret-pass")
 
@@ -115,13 +121,13 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertFalse(auth.verify_password("wrong-pass", password_hash))
 
     def test_password_verification_rejects_corrupted_hashes(self):
-        auth = importlib.import_module("auth")
+        auth = importlib.import_module("app.services.auth")
 
         self.assertFalse(auth.verify_password("secret-pass", None))
         self.assertFalse(auth.verify_password("secret-pass", "not-a-valid-hash"))
 
     def test_session_token_round_trip(self):
-        auth = importlib.import_module("auth")
+        auth = importlib.import_module("app.services.auth")
 
         token = auth.create_session_token({"user_id": 7, "username": "alice"}, "test-secret")
         payload = auth.verify_session_token(token, "test-secret")
@@ -130,7 +136,7 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertEqual(payload["username"], "alice")
 
     def test_session_token_rejects_tampering_and_expiry(self):
-        auth = importlib.import_module("auth")
+        auth = importlib.import_module("app.services.auth")
 
         token = auth.create_session_token({"user_id": 7}, "test-secret")
         encoded, signature = token.split(".", 1)
@@ -141,7 +147,7 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertIsNone(auth.verify_session_token(expired, "test-secret"))
 
     def test_extract_code_hash_accepts_correct_code_and_rejects_wrong_code(self):
-        shares = importlib.import_module("shares")
+        shares = importlib.import_module("app.services.shares")
 
         code_hash = shares.hash_extract_code("A1b2")
 
@@ -150,14 +156,14 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertFalse(shares.verify_extract_code("wrong", code_hash))
 
     def test_point_helpers_calculate_share_and_node_download_points(self):
-        points = importlib.import_module("points")
+        points = importlib.import_module("app.services.points")
 
         self.assertEqual(points.share_download_points(), 1)
         self.assertEqual(points.node_download_points(10), 1.0)
         self.assertEqual(points.points_to_earning_units(250), 2.5)
 
     def test_withdrawal_amount_validation(self):
-        withdrawals = importlib.import_module("withdrawals")
+        withdrawals = importlib.import_module("app.services.withdrawals")
 
         self.assertEqual(withdrawals.validate_withdrawal_amount(1), (True, "ok"))
         self.assertEqual(withdrawals.validate_withdrawal_amount(0), (False, "提现金额必须大于0"))
@@ -166,13 +172,13 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertEqual(withdrawals.validate_withdrawal_amount("1e-400"), (False, "提现金额不能小于0.000001"))
 
     def test_withdrawal_review_status_validation(self):
-        withdrawals = importlib.import_module("withdrawals")
+        withdrawals = importlib.import_module("app.services.withdrawals")
 
         self.assertEqual(withdrawals.validate_review_status("approved"), (True, "ok"))
         self.assertEqual(withdrawals.validate_review_status("unknown"), (False, "提现状态无效"))
 
     def test_withdrawal_status_transition_validation(self):
-        withdrawals = importlib.import_module("withdrawals")
+        withdrawals = importlib.import_module("app.services.withdrawals")
 
         self.assertEqual(withdrawals.validate_status_transition("pending", "approved"), (True, "ok"))
         self.assertEqual(withdrawals.validate_status_transition("approved", "paid"), (True, "ok"))
@@ -180,7 +186,7 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertEqual(withdrawals.validate_status_transition("pending", "pending"), (False, "不能将提现审核为 pending"))
 
     def test_validate_share_access_rejects_expired_active_share(self):
-        shares = importlib.import_module("shares")
+        shares = importlib.import_module("app.services.shares")
         expired_share = {
             "status": "active",
             "expires_at": "2000-01-01T00:00:00",
@@ -193,7 +199,7 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertEqual(result, (False, 410, "分享已过期"))
 
     def test_validate_share_access_rejects_exhausted_active_share(self):
-        shares = importlib.import_module("shares")
+        shares = importlib.import_module("app.services.shares")
         exhausted_share = {
             "status": "active",
             "expires_at": None,
@@ -206,7 +212,7 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertEqual(result, (False, 429, "下载次数已用完"))
 
     def test_validate_share_access_treats_naive_expiry_as_server_local_time(self):
-        shares = importlib.import_module("shares")
+        shares = importlib.import_module("app.services.shares")
         datetime_module = importlib.import_module("datetime")
         expired_local_time = datetime_module.datetime.now() - datetime_module.timedelta(seconds=1)
         expired_share = {
@@ -240,7 +246,7 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertEqual(parsed, aware.astimezone().replace(tzinfo=None))
 
     def test_wallet_login_message_contains_nonce_and_purpose(self):
-        auth = importlib.import_module("auth")
+        auth = importlib.import_module("app.services.auth")
 
         message = auth.build_wallet_message("abc123", "login")
 
@@ -303,7 +309,7 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertEqual(response.status_code, 409)
 
     def test_login_rejects_bad_password(self):
-        auth = importlib.import_module("auth")
+        auth = importlib.import_module("app.services.auth")
         server_main = load_server_main(SESSION_SECRET="session-secret")
         server_main.init_db = lambda: True
         server_main.select_user_by_username = lambda username: (
@@ -334,7 +340,7 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertEqual(response.content_type, "application/json")
 
     def test_login_fails_safely_without_session_secret(self):
-        auth = importlib.import_module("auth")
+        auth = importlib.import_module("app.services.auth")
         server_main = load_server_main()
         server_main.init_db = lambda: True
         server_main.select_user_by_username = lambda username: (
@@ -354,7 +360,7 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertEqual(response.content_type, "application/json")
 
     def test_login_without_session_secret_does_not_reveal_password_validity(self):
-        auth = importlib.import_module("auth")
+        auth = importlib.import_module("app.services.auth")
         server_main = load_server_main()
         server_main.init_db = lambda: True
         server_main.select_user_by_username = lambda username: (
@@ -381,7 +387,7 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertEqual(invalid_response.content_type, "application/json")
 
     def test_login_does_not_use_admin_api_token_as_session_secret(self):
-        auth = importlib.import_module("auth")
+        auth = importlib.import_module("app.services.auth")
         server_main = load_server_main(ADMIN_API_TOKEN="admin-secret")
         server_main.init_db = lambda: True
         server_main.select_user_by_username = lambda username: (
@@ -414,7 +420,7 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertEqual(response.content_type, "application/json")
 
     def test_login_can_issue_token_with_session_secret(self):
-        auth = importlib.import_module("auth")
+        auth = importlib.import_module("app.services.auth")
         server_main = load_server_main(SESSION_SECRET="session-secret")
         server_main.init_db = lambda: True
         server_main.select_user_by_username = lambda username: (
@@ -447,7 +453,7 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertIn("token", response.get_json())
 
     def test_login_rejects_inactive_user(self):
-        auth = importlib.import_module("auth")
+        auth = importlib.import_module("app.services.auth")
         server_main = load_server_main(SESSION_SECRET="session-secret")
         server_main.init_db = lambda: True
         server_main.select_user_by_username = lambda username: (
@@ -466,7 +472,7 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertEqual(response.status_code, 401)
 
     def test_login_rejects_null_status_user(self):
-        auth = importlib.import_module("auth")
+        auth = importlib.import_module("app.services.auth")
         server_main = load_server_main(SESSION_SECRET="session-secret")
         server_main.init_db = lambda: True
         server_main.select_user_by_username = lambda username: (
@@ -491,7 +497,7 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertEqual(response.status_code, 401)
 
     def test_auth_me_rejects_known_default_secret_when_unconfigured(self):
-        auth = importlib.import_module("auth")
+        auth = importlib.import_module("app.services.auth")
         server_main = load_server_main()
         server_main.init_db = lambda: True
         server_main.select_user_by_id = lambda user_id: (
@@ -511,7 +517,7 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertEqual(response.status_code, 503)
 
     def test_auth_me_accepts_valid_configured_session_secret(self):
-        auth = importlib.import_module("auth")
+        auth = importlib.import_module("app.services.auth")
         server_main = load_server_main(SESSION_SECRET="session-secret")
         server_main.init_db = lambda: True
         server_main.select_user_by_id = lambda user_id: (
@@ -531,7 +537,7 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
 
     def test_auth_me_rejects_inactive_user_token(self):
-        auth = importlib.import_module("auth")
+        auth = importlib.import_module("app.services.auth")
         server_main = load_server_main(SESSION_SECRET="session-secret")
         server_main.init_db = lambda: True
         server_main.select_user_by_id = lambda user_id: (
@@ -551,7 +557,7 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertEqual(response.status_code, 401)
 
     def test_auth_me_rejects_null_status_user_token(self):
-        auth = importlib.import_module("auth")
+        auth = importlib.import_module("app.services.auth")
         server_main = load_server_main(SESSION_SECRET="session-secret")
         server_main.init_db = lambda: True
         server_main.select_user_by_id = lambda user_id: (
@@ -652,7 +658,7 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertEqual(response.content_type, "application/json")
 
     def test_wallet_bind_missing_fields_return_json_400(self):
-        auth = importlib.import_module("auth")
+        auth = importlib.import_module("app.services.auth")
         server_main = load_server_main(SESSION_SECRET="session-secret")
         server_main.init_db = lambda: True
         token = auth.create_session_token({"user_id": 7, "username": "alice"}, "session-secret")
@@ -682,7 +688,7 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertEqual(partial_response.content_type, "application/json")
 
     def test_wallet_bind_numeric_wallet_address_returns_json_400(self):
-        auth = importlib.import_module("auth")
+        auth = importlib.import_module("app.services.auth")
         server_main = load_server_main(SESSION_SECRET="session-secret")
         server_main.init_db = lambda: True
         token = auth.create_session_token({"user_id": 7, "username": "alice"}, "session-secret")
@@ -725,7 +731,7 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertEqual(response.content_type, "application/json")
 
     def test_wallet_bind_invalid_nonce_returns_json_400(self):
-        auth = importlib.import_module("auth")
+        auth = importlib.import_module("app.services.auth")
         server_main = load_server_main(SESSION_SECRET="session-secret")
         server_main.init_db = lambda: True
         token = auth.create_session_token({"user_id": 7, "username": "alice"}, "session-secret")
@@ -907,7 +913,7 @@ class MysqlConfigTest(unittest.TestCase):
             env_path.unlink(missing_ok=True)
 
     def test_init_mysql_sql_contains_database_and_required_tables(self):
-        sql = Path("init_mysql.sql").read_text(encoding="utf-8")
+        sql = Path("app/schema/init_mysql.sql").read_text(encoding="utf-8")
 
         self.assertIn("CREATE DATABASE IF NOT EXISTS `web3_modes_store`", sql)
         self.assertIn("USE `web3_modes_store`", sql)
@@ -927,7 +933,7 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertIn("`deleted_at` datetime", sql)
 
     def test_init_postgresql_sql_contains_database_tables_and_constraints(self):
-        sql = Path("init_postgresql.sql").read_text(encoding="utf-8")
+        sql = Path("app/schema/init_postgresql.sql").read_text(encoding="utf-8")
 
         self.assertIn("CREATE TABLE IF NOT EXISTS user_node", sql)
         self.assertIn("id SERIAL PRIMARY KEY", sql)
@@ -938,7 +944,7 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertIn("visibility varchar(16)", sql)
 
     def test_user_product_tables_exist_in_postgresql_init_sql(self):
-        sql = Path("init_postgresql.sql").read_text(encoding="utf-8")
+        sql = Path("app/schema/init_postgresql.sql").read_text(encoding="utf-8")
 
         for table_name in (
             "app_user",
@@ -956,7 +962,7 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertIn("last_download_at timestamp DEFAULT NULL", sql)
 
     def test_user_product_tables_exist_in_mysql_init_sql(self):
-        sql = Path("init_mysql.sql").read_text(encoding="utf-8")
+        sql = Path("app/schema/init_mysql.sql").read_text(encoding="utf-8")
 
         for table_name in (
             "app_user",
@@ -974,8 +980,8 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertIn("`last_download_at` datetime DEFAULT NULL", sql)
 
     def test_withdrawal_request_node_fields_exist_in_init_sql_and_migrations(self):
-        mysql_sql = Path("init_mysql.sql").read_text(encoding="utf-8")
-        postgres_sql = Path("init_postgresql.sql").read_text(encoding="utf-8")
+        mysql_sql = Path("app/schema/init_mysql.sql").read_text(encoding="utf-8")
+        postgres_sql = Path("app/schema/init_postgresql.sql").read_text(encoding="utf-8")
         mysql_server = load_server_main(DB_ENGINE="mysql")
         postgres_server = load_server_main(DB_ENGINE="postgresql")
         mysql_migrations = "\n".join(mysql_server.database_module.SCHEMA_MIGRATIONS)
@@ -990,7 +996,7 @@ class MysqlConfigTest(unittest.TestCase):
             self.assertIn(column, postgres_migrations)
 
     def test_user_product_indexes_exist_in_postgresql_init_sql_and_migrations(self):
-        sql = Path("init_postgresql.sql").read_text(encoding="utf-8")
+        sql = Path("app/schema/init_postgresql.sql").read_text(encoding="utf-8")
         server_main = load_server_main(DB_ENGINE="postgresql")
         migrations = "\n".join(server_main.database_module.POSTGRES_SCHEMA_MIGRATIONS)
 
@@ -1013,7 +1019,7 @@ class MysqlConfigTest(unittest.TestCase):
             self.assertIn(expected, migrations)
 
     def test_user_product_indexes_exist_in_mysql_init_sql_and_migrations(self):
-        sql = Path("init_mysql.sql").read_text(encoding="utf-8")
+        sql = Path("app/schema/init_mysql.sql").read_text(encoding="utf-8")
         server_main = load_server_main(DB_ENGINE="mysql")
         migrations = "\n".join(server_main.database_module.SCHEMA_MIGRATIONS)
 
@@ -1038,8 +1044,8 @@ class MysqlConfigTest(unittest.TestCase):
             self.assertIn(f"CREATE INDEX {index_name}", migrations)
 
     def test_node_power_capacity_fields_exist_in_init_sql_and_migrations(self):
-        mysql_sql = Path("init_mysql.sql").read_text(encoding="utf-8")
-        postgres_sql = Path("init_postgresql.sql").read_text(encoding="utf-8")
+        mysql_sql = Path("app/schema/init_mysql.sql").read_text(encoding="utf-8")
+        postgres_sql = Path("app/schema/init_postgresql.sql").read_text(encoding="utf-8")
         mysql_server = load_server_main(DB_ENGINE="mysql")
         postgres_server = load_server_main(DB_ENGINE="postgresql")
         mysql_migrations = "\n".join(mysql_server.database_module.SCHEMA_MIGRATIONS)
@@ -1062,8 +1068,8 @@ class MysqlConfigTest(unittest.TestCase):
             self.assertIn(column, postgres_migrations)
 
     def test_shard_and_audit_schema_exist(self):
-        mysql_sql = Path("init_mysql.sql").read_text(encoding="utf-8")
-        postgres_sql = Path("init_postgresql.sql").read_text(encoding="utf-8")
+        mysql_sql = Path("app/schema/init_mysql.sql").read_text(encoding="utf-8")
+        postgres_sql = Path("app/schema/init_postgresql.sql").read_text(encoding="utf-8")
         mysql_server = load_server_main(DB_ENGINE="mysql")
         postgres_server = load_server_main(DB_ENGINE="postgresql")
         mysql_migrations = "\n".join(mysql_server.database_module.SCHEMA_MIGRATIONS)
@@ -1289,7 +1295,7 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertNotIn('id="adminTokenInput"', server_main.ADMIN_HTML)
         self.assertNotIn("saveAdminToken", server_main.ADMIN_HTML)
         self.assertNotIn("clearAdminToken", server_main.ADMIN_HTML)
-        admin_login_source = server_main.ADMIN_LOGIN_HTML + read_static_asset_or_empty("static/admin-login.js")
+        admin_login_source = server_main.ADMIN_LOGIN_HTML + read_static_asset_or_empty("app/static/js/admin-login.js")
         self.assertIn('id="adminTokenInput"', server_main.ADMIN_LOGIN_HTML)
         self.assertIn("/api/admin/login", admin_login_source)
 
@@ -1301,17 +1307,17 @@ class MysqlConfigTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         body = response.get_data(as_text=True)
-        admin_login_source = body + read_static_asset_or_empty("static/admin-login.js")
+        admin_login_source = body + read_static_asset_or_empty("app/static/js/admin-login.js")
         self.assertIn("后台登录", body)
-        self.assertIn('href="/static/admin-login.css"', body)
-        self.assertIn('src="/static/admin-login.js"', body)
+        self.assertIn('href="/static/css/admin-login.css"', body)
+        self.assertIn('src="/static/js/admin-login.js"', body)
         self.assertIn("/api/admin/login", admin_login_source)
         self.assertIn("admin_token", admin_login_source)
         self.assertEqual(server_main.ADMIN_LOGIN_TEMPLATE, "admin_login.html")
-        self.assertTrue(Path("templates/admin_login.html").exists())
-        self.assertTrue(Path("static/admin-login.css").exists())
-        self.assertTrue(Path("static/admin-login.js").exists())
-        self.assertIn('id="adminTokenInput"', Path("templates/admin_login.html").read_text(encoding="utf-8"))
+        self.assertTrue(Path("app/templates/admin_login.html").exists())
+        self.assertTrue(Path("app/static/css/admin-login.css").exists())
+        self.assertTrue(Path("app/static/js/admin-login.js").exists())
+        self.assertIn('id="adminTokenInput"', Path("app/templates/admin_login.html").read_text(encoding="utf-8"))
 
     def test_public_homepage_links_business_user_admin_and_node_flows(self):
         server_main = load_server_main(ADMIN_API_TOKEN="secret-token")
@@ -1341,7 +1347,13 @@ class MysqlConfigTest(unittest.TestCase):
         server_main = load_server_main(ADMIN_API_TOKEN="secret-token")
         flask_app_package = importlib.import_module("app")
         config_module = importlib.import_module("app.config")
+        database_module = importlib.import_module("app.database")
         routes_package = importlib.import_module("app.routes")
+        auth_service = importlib.import_module("app.services.auth")
+        files_service = importlib.import_module("app.services.files")
+        points_service = importlib.import_module("app.services.points")
+        shares_service = importlib.import_module("app.services.shares")
+        withdrawals_service = importlib.import_module("app.services.withdrawals")
         server_runtime = importlib.import_module("app.services.runtime")
         server_pages = importlib.import_module("app.web.pages")
         server_ipfs = importlib.import_module("app.services.ipfs")
@@ -1350,6 +1362,47 @@ class MysqlConfigTest(unittest.TestCase):
 
         self.assertIs(flask_app_package.create_app(), server_main.app)
         self.assertIsInstance(server_main.SERVER_CONFIG, config_module.ServerConfig)
+        self.assertEqual(server_main.database_module.__name__, "app.database")
+        self.assertEqual(server_main.connect_database.__module__, "app.database")
+        self.assertEqual(server_main.BASE_DIR, database_module.BASE_DIR)
+        self.assertIs(server_main.auth, auth_service)
+        self.assertIs(server_main.withdrawals, withdrawals_service)
+        self.assertIs(server_main.points, points_service)
+        self.assertIs(server_main.shares, shares_service)
+        self.assertEqual(server_main.format_user_file_record.__module__, "app.services.files")
+        self.assertEqual(files_service.format_user_file_record.__module__, "app.services.files")
+        for path in (
+            "auth.py",
+            "db.py",
+            "points.py",
+            "shares.py",
+            "files.py",
+            "withdrawals.py",
+            "init_mysql.sql",
+            "init_postgresql.sql",
+            "upload.html",
+            "download.html",
+            "client.py",
+            "client_config.py",
+            "client_console.py",
+            "node_mac.py",
+            "templates",
+            "static",
+            "app/legacy_templates",
+        ):
+            self.assertFalse(Path(path).exists(), path)
+        for path in (
+            "app/templates",
+            "app/templates/upload.html",
+            "app/templates/download.html",
+            "app/static/css",
+            "app/static/js",
+            "app/schema/init_mysql.sql",
+            "app/schema/init_postgresql.sql",
+        ):
+            self.assertTrue(Path(path).exists(), path)
+        self.assertFalse(list(Path("app/static").glob("*.css")))
+        self.assertFalse(list(Path("app/static").glob("*.js")))
         self.assertTrue(callable(routes_package.register_blueprints))
         self.assertIs(server_main.ensure_runtime_secrets, server_runtime.ensure_runtime_secrets)
         self.assertIs(server_main.parse_env_file_values, server_runtime.parse_env_file_values)
@@ -1364,6 +1417,27 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertIs(server_main.normalize_visibility, server_storage.normalize_visibility)
         self.assertIs(server_main.build_encrypted_shard_manifest, server_storage.build_encrypted_shard_manifest)
 
+    def test_legacy_upload_and_download_pages_are_templates_with_split_assets(self):
+        for page_name in ("upload", "download"):
+            template_path = Path(f"app/templates/{page_name}.html")
+            css_path = Path(f"app/static/css/{page_name}.css")
+            js_path = Path(f"app/static/js/{page_name}.js")
+            self.assertTrue(template_path.exists(), page_name)
+            self.assertTrue(css_path.exists(), page_name)
+            self.assertTrue(js_path.exists(), page_name)
+
+            html = template_path.read_text(encoding="utf-8")
+            css = css_path.read_text(encoding="utf-8")
+            js = js_path.read_text(encoding="utf-8")
+            self.assertIn(f'href="/static/css/{page_name}.css"', html)
+            self.assertIn(f'src="/static/js/{page_name}.js"', html)
+            self.assertNotIn("<style>", html)
+            self.assertNotIn("<script>", html)
+            self.assertNotIn("style=", html)
+            self.assertNotIn("style=", js)
+            self.assertTrue(css.strip())
+            self.assertTrue(js.strip())
+
     def test_admin_dashboard_is_available_at_admin_without_database(self):
         server_main = load_server_main(ADMIN_API_TOKEN="secret-token")
         server_main.init_db = lambda: self.fail("admin dashboard shell should not require database")
@@ -1373,21 +1447,21 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         body = response.get_data(as_text=True)
         admin_assets = (
-            read_static_asset_or_empty("static/admin-dashboard.css")
-            + read_static_asset_or_empty("static/admin-dashboard.js")
+            read_static_asset_or_empty("app/static/css/admin-dashboard.css")
+            + read_static_asset_or_empty("app/static/js/admin-dashboard.js")
         )
         self.assertIn('id="nodeTable"', body)
         self.assertIn("/admin/login", body)
         self.assertIn("admin-node-grid", body)
         self.assertIn("node-storage-usage", body + admin_assets)
-        self.assertIn('href="/static/admin-dashboard.css"', body)
-        self.assertIn('src="/static/admin-dashboard.js"', body)
+        self.assertIn('href="/static/css/admin-dashboard.css"', body)
+        self.assertIn('src="/static/js/admin-dashboard.js"', body)
         self.assertEqual(server_main.ADMIN_DASHBOARD_TEMPLATE, "admin_dashboard.html")
-        self.assertTrue(Path("templates/admin_dashboard.html").exists())
-        self.assertTrue(Path("static/admin-dashboard.css").exists())
-        self.assertTrue(Path("static/admin-dashboard.js").exists())
-        self.assertIn("id=\"nodeTable\"", Path("templates/admin_dashboard.html").read_text(encoding="utf-8"))
-        self.assertIn("formatNodeStorage", Path("static/admin-dashboard.js").read_text(encoding="utf-8"))
+        self.assertTrue(Path("app/templates/admin_dashboard.html").exists())
+        self.assertTrue(Path("app/static/css/admin-dashboard.css").exists())
+        self.assertTrue(Path("app/static/js/admin-dashboard.js").exists())
+        self.assertIn("id=\"nodeTable\"", Path("app/templates/admin_dashboard.html").read_text(encoding="utf-8"))
+        self.assertIn("formatNodeStorage", Path("app/static/js/admin-dashboard.js").read_text(encoding="utf-8"))
         for marker in (
             "unified-console-shell",
             "console-sidebar",
@@ -1415,7 +1489,7 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertIn('data-console-role="user"', user_body)
         self.assertIn("unified-console-shell", admin_body)
         self.assertIn("unified-console-shell", user_body)
-        console_js = Path("static/console.js").read_text(encoding="utf-8")
+        console_js = Path("app/static/js/console.js").read_text(encoding="utf-8")
         self.assertIn("requireAdminLogin", console_js)
         self.assertIn("requireUserLogin", console_js)
         self.assertIn("/api/node_list", console_js)
@@ -1431,14 +1505,20 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         body = response.get_data(as_text=True)
         self.assertEqual(server_main.MANAGEMENT_CONSOLE_TEMPLATE, "management_console.html")
-        self.assertIn('href="/static/console.css"', body)
-        self.assertIn('src="/static/console.js"', body)
+        self.assertIn('href="/static/css/console.css"', body)
+        self.assertIn('src="/static/js/console.js"', body)
         self.assertNotIn("async function loadUserWorkspace", body)
-        self.assertTrue(Path("templates/management_console.html").exists())
-        self.assertTrue(Path("static/console.css").exists())
-        self.assertTrue(Path("static/console.js").exists())
-        self.assertIn("unified-console-shell", Path("static/console.css").read_text(encoding="utf-8"))
-        self.assertIn("loadUserWorkspace", Path("static/console.js").read_text(encoding="utf-8"))
+        self.assertTrue(Path("app/templates/management_console.html").exists())
+        self.assertTrue(Path("app/static/css/console.css").exists())
+        self.assertTrue(Path("app/static/js/console.js").exists())
+        self.assertIn("unified-console-shell", Path("app/static/css/console.css").read_text(encoding="utf-8"))
+        self.assertIn("loadUserWorkspace", Path("app/static/js/console.js").read_text(encoding="utf-8"))
+        static_response = client.get("/static/css/console.css")
+        try:
+            self.assertEqual(static_response.status_code, 200)
+            self.assertIn("unified-console-shell", static_response.get_data(as_text=True))
+        finally:
+            static_response.close()
 
     def test_admin_login_api_validates_token_without_admin_header(self):
         server_main = load_server_main(ADMIN_API_TOKEN="secret-token")
@@ -1458,16 +1538,16 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertIn("/admin/login", server_main.ADMIN_HTML)
         self.assertIn(
             'window.location.href = "/admin"',
-            server_main.ADMIN_LOGIN_HTML + read_static_asset_or_empty("static/admin-login.js"),
+            server_main.ADMIN_LOGIN_HTML + read_static_asset_or_empty("app/static/js/admin-login.js"),
         )
         self.assertIn(
             "requireAdminLogin",
-            server_main.ADMIN_HTML + read_static_asset_or_empty("static/admin-dashboard.js"),
+            server_main.ADMIN_HTML + read_static_asset_or_empty("app/static/js/admin-dashboard.js"),
         )
 
     def test_admin_page_auto_refreshes_dashboard_data(self):
         server_main = load_server_main(ADMIN_API_TOKEN="secret-token")
-        admin_js = read_static_asset_or_empty("static/admin-dashboard.js")
+        admin_js = read_static_asset_or_empty("app/static/js/admin-dashboard.js")
         admin_source = server_main.ADMIN_HTML + admin_js
 
         self.assertIn("ADMIN_REFRESH_INTERVAL_MS", admin_source)
@@ -1486,7 +1566,7 @@ class MysqlConfigTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         body = response.get_data(as_text=True)
-        admin_source = body + read_static_asset_or_empty("static/admin-dashboard.js")
+        admin_source = body + read_static_asset_or_empty("app/static/js/admin-dashboard.js")
         self.assertNotIn("6f17f9896974a8686929496921212479", body)
         self.assertNotIn("webapi.amap.com/maps?v=2.0&key=", body)
         self.assertIn("AMAP_WEB_KEY", admin_source)
@@ -1501,7 +1581,7 @@ class MysqlConfigTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         body = response.get_data(as_text=True)
-        admin_source = body + read_static_asset_or_empty("static/admin-dashboard.js")
+        admin_source = body + read_static_asset_or_empty("app/static/js/admin-dashboard.js")
         self.assertNotIn("webapi.amap.com/maps?v=2.0&key=valid-map-key", body)
         self.assertIn("AMAP_SECURITY_JSCODE", admin_source)
         self.assertIn("renderMapFallback", admin_source)
@@ -1546,9 +1626,9 @@ class MysqlConfigTest(unittest.TestCase):
         login = client.get("/user/login").get_data(as_text=True)
 
         self.assertEqual(homepage.count(":root{--ink"), 1)
-        admin_source = admin + read_static_asset_or_empty("static/admin-dashboard.css")
-        admin_login_source = admin_login + read_static_asset_or_empty("static/admin-login.css")
-        login_source = login + read_static_asset_or_empty("static/user-login.css")
+        admin_source = admin + read_static_asset_or_empty("app/static/css/admin-dashboard.css")
+        admin_login_source = admin_login + read_static_asset_or_empty("app/static/css/admin-login.css")
+        login_source = login + read_static_asset_or_empty("app/static/css/user-login.css")
         for body in (homepage, admin_source, admin_login_source, login_source):
             self.assertIn("premium-button", body)
             self.assertIn("button-shine", body)
@@ -1693,7 +1773,7 @@ class MysqlConfigTest(unittest.TestCase):
 
     def test_admin_page_renders_capacity_and_withdrawal_sections(self):
         server_main = load_server_main(ADMIN_API_TOKEN="secret-token")
-        admin_source = server_main.ADMIN_HTML + read_static_asset_or_empty("static/admin-dashboard.js")
+        admin_source = server_main.ADMIN_HTML + read_static_asset_or_empty("app/static/js/admin-dashboard.js")
 
         self.assertIn("总容量", server_main.ADMIN_HTML)
         self.assertIn("可用容量", server_main.ADMIN_HTML)
@@ -1791,7 +1871,7 @@ class MysqlConfigTest(unittest.TestCase):
 
     def test_admin_page_renders_storage_audit_section(self):
         server_main = load_server_main(ADMIN_API_TOKEN="secret-token")
-        admin_source = server_main.ADMIN_HTML + read_static_asset_or_empty("static/admin-dashboard.js")
+        admin_source = server_main.ADMIN_HTML + read_static_asset_or_empty("app/static/js/admin-dashboard.js")
 
         for marker in (
             "存储审计日志",
@@ -2724,17 +2804,20 @@ class MysqlConfigTest(unittest.TestCase):
         try:
             sys.modules["requests"] = types.SimpleNamespace(post=lambda *args, **kwargs: None, get=lambda *args, **kwargs: None)
             sys.modules["webview"] = None
-            sys.modules.pop("client", None)
-            sys.modules.pop("client_console", None)
+            for name in ("client", "client.main", "client_console", "client.console"):
+                sys.modules.pop(name, None)
             client_module = importlib.import_module("client")
-            console_module = importlib.import_module("client_console")
+            console_module = importlib.import_module("client.console")
+            package_console_module = importlib.import_module("client.console")
 
-            self.assertIs(client_module.CLIENT_MANAGE_HTML, console_module.CLIENT_MANAGE_HTML)
+            self.assertIs(client_module.CLIENT_MANAGE_HTML, package_console_module.CLIENT_MANAGE_HTML)
+            self.assertIs(console_module.CLIENT_MANAGE_HTML, package_console_module.CLIENT_MANAGE_HTML)
             self.assertIn('id="autoRefreshState"', console_module.CLIENT_MANAGE_HTML)
             self.assertIn("csrf-token-demo", console_module.render_client_console_html("csrf-token-demo"))
+            self.assertEqual(console_module.render_client_console_html.__module__, "client.console")
         finally:
-            sys.modules.pop("client", None)
-            sys.modules.pop("client_console", None)
+            for name in ("client", "client.main", "client_console", "client.console"):
+                sys.modules.pop(name, None)
             if old_requests is None:
                 sys.modules.pop("requests", None)
             else:
@@ -2750,19 +2833,70 @@ class MysqlConfigTest(unittest.TestCase):
         try:
             sys.modules["requests"] = types.SimpleNamespace(post=lambda *args, **kwargs: None, get=lambda *args, **kwargs: None)
             sys.modules["webview"] = None
-            sys.modules.pop("client", None)
-            sys.modules.pop("client_config", None)
+            for name in ("client", "client.main", "client_config", "client.config"):
+                sys.modules.pop(name, None)
             client_module = importlib.import_module("client")
-            config_module = importlib.import_module("client_config")
+            config_module = importlib.import_module("client.config")
+            package_config_module = importlib.import_module("client.config")
 
-            self.assertIs(client_module.load_client_config, config_module.load_client_config)
-            self.assertIs(client_module.get_invite_arg, config_module.get_invite_arg)
-            self.assertIs(client_module.get_storage_dir_arg, config_module.get_storage_dir_arg)
-            self.assertIs(client_module.get_manage_port_arg, config_module.get_manage_port_arg)
-            self.assertIs(client_module.get_storage_quota_arg, config_module.get_storage_quota_arg)
+            self.assertIs(client_module.load_client_config, package_config_module.load_client_config)
+            self.assertIs(config_module.load_client_config, package_config_module.load_client_config)
+            self.assertIs(client_module.get_invite_arg, package_config_module.get_invite_arg)
+            self.assertIs(client_module.get_storage_dir_arg, package_config_module.get_storage_dir_arg)
+            self.assertIs(client_module.get_manage_port_arg, package_config_module.get_manage_port_arg)
+            self.assertIs(client_module.get_storage_quota_arg, package_config_module.get_storage_quota_arg)
+            self.assertEqual(config_module.load_client_config.__module__, "client.config")
+            self.assertEqual(config_module.get_invite_arg.__module__, "client.config")
         finally:
-            sys.modules.pop("client", None)
-            sys.modules.pop("client_config", None)
+            for name in ("client", "client.main", "client_config", "client.config"):
+                sys.modules.pop(name, None)
+            if old_requests is None:
+                sys.modules.pop("requests", None)
+            else:
+                sys.modules["requests"] = old_requests
+            if old_webview is None:
+                sys.modules.pop("webview", None)
+            else:
+                sys.modules["webview"] = old_webview
+
+    def test_client_entrypoints_live_in_client_package_without_root_compatibility_shells(self):
+        old_requests = sys.modules.get("requests")
+        old_webview = sys.modules.get("webview")
+        old_argv = sys.argv[:]
+        try:
+            sys.modules["requests"] = types.SimpleNamespace(post=lambda *args, **kwargs: None, get=lambda *args, **kwargs: None)
+            sys.modules["webview"] = None
+            sys.argv = ["client.exe"]
+            for name in ("client", "client.main", "client.node_mac"):
+                sys.modules.pop(name, None)
+
+            client_module = importlib.import_module("client")
+            client_main = importlib.import_module("client.main")
+            package_config = importlib.import_module("client.config")
+            package_console = importlib.import_module("client.console")
+            package_node_mac = importlib.import_module("client.node_mac")
+
+            self.assertIs(client_module.main, client_main.main)
+            self.assertEqual(client_module.create_client_state.__module__, "client.main")
+            self.assertEqual(package_config.load_client_config.__module__, "client.config")
+            self.assertEqual(package_console.render_client_console_html.__module__, "client.console")
+            self.assertEqual(package_node_mac.get_device_id.__module__, "client.node_mac")
+            for path in (
+                "client/main.py",
+                "client/config.py",
+                "client/console.py",
+                "client/node_mac.py",
+                "client/node_config.example.json",
+                "client/build_exe.bat",
+                "client/build_mac.sh",
+            ):
+                self.assertTrue(Path(path).exists(), path)
+            for path in ("client.py", "client_config.py", "client_console.py", "node_mac.py"):
+                self.assertFalse(Path(path).exists(), path)
+        finally:
+            sys.argv = old_argv
+            for name in ("client", "client.main", "client.node_mac"):
+                sys.modules.pop(name, None)
             if old_requests is None:
                 sys.modules.pop("requests", None)
             else:
@@ -3582,7 +3716,7 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertEqual(record["nodes"], ["NODE_A", "NODE_B"])
 
     def test_user_file_record_format_includes_owner_and_download_fields(self):
-        files = importlib.import_module("files")
+        files = importlib.import_module("app.services.files")
         now = importlib.import_module("datetime").datetime.now()
         row = (
             1,
@@ -3619,7 +3753,7 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertEqual(response.status_code, 401)
 
     def test_user_withdrawal_create_uses_current_user_wallet_and_available_earnings(self):
-        auth = importlib.import_module("auth")
+        auth = importlib.import_module("app.services.auth")
         server_main = load_server_main(SESSION_SECRET="session-secret")
         token = auth.create_session_token({"user_id": 7, "username": "alice"}, "session-secret")
 
@@ -3672,7 +3806,7 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertLess(lock_index, insert_index)
 
     def test_user_withdrawal_over_withdraw_returns_400_without_insert(self):
-        auth = importlib.import_module("auth")
+        auth = importlib.import_module("app.services.auth")
         server_main = load_server_main(SESSION_SECRET="session-secret")
         token = auth.create_session_token({"user_id": 7, "username": "alice"}, "session-secret")
 
@@ -3716,7 +3850,7 @@ class MysqlConfigTest(unittest.TestCase):
         ))
 
     def test_user_withdrawal_tiny_amount_returns_400_without_insert(self):
-        auth = importlib.import_module("auth")
+        auth = importlib.import_module("app.services.auth")
         server_main = load_server_main(SESSION_SECRET="session-secret")
         token = auth.create_session_token({"user_id": 7, "username": "alice"}, "session-secret")
 
@@ -4114,9 +4248,9 @@ class MysqlConfigTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         body = response.get_data(as_text=True)
-        upload_source = body + read_static_asset_or_empty("static/user-upload.js")
-        self.assertIn('href="/static/user-upload.css"', body)
-        self.assertIn('src="/static/user-upload.js"', body)
+        upload_source = body + read_static_asset_or_empty("app/static/js/user-upload.js")
+        self.assertIn('href="/static/css/user-upload.css"', body)
+        self.assertIn('src="/static/js/user-upload.js"', body)
         self.assertIn("/api/user/files", upload_source)
         self.assertIn('/api/user/files/${encodeURIComponent(fileHash)}/shares', upload_source)
         self.assertIn("/s/", upload_source)
@@ -4131,10 +4265,10 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertIn("share_url_with_extract_code", upload_source)
         self.assertIn('target="_blank"', upload_source)
         self.assertEqual(server_main.USER_UPLOAD_TEMPLATE, "user_upload.html")
-        self.assertTrue(Path("templates/user_upload.html").exists())
-        self.assertTrue(Path("static/user-upload.css").exists())
-        self.assertTrue(Path("static/user-upload.js").exists())
-        self.assertIn("generateDefaultExtractCode", Path("static/user-upload.js").read_text(encoding="utf-8"))
+        self.assertTrue(Path("app/templates/user_upload.html").exists())
+        self.assertTrue(Path("app/static/css/user-upload.css").exists())
+        self.assertTrue(Path("app/static/js/user-upload.js").exists())
+        self.assertIn("generateDefaultExtractCode", Path("app/static/js/user-upload.js").read_text(encoding="utf-8"))
 
     def test_user_login_page_renders_forms_and_token_storage(self):
         server_main = load_server_main(SESSION_SECRET="session-secret")
@@ -4144,7 +4278,7 @@ class MysqlConfigTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         body = response.get_data(as_text=True)
-        login_source = body + read_static_asset_or_empty("static/user-login.js")
+        login_source = body + read_static_asset_or_empty("app/static/js/user-login.js")
         self.assertIn("钱包登录", body)
         for marker in (
             'data-auth-tab="login"',
@@ -4187,18 +4321,18 @@ class MysqlConfigTest(unittest.TestCase):
             self.assertNotIn(marker, body)
         for provider in ("163.com", "gmail.com", "outlook.com", "icloud.com"):
             self.assertIn(provider, body)
-        self.assertIn('href="/static/user-login.css"', body)
-        self.assertIn('src="/static/user-login.js"', body)
+        self.assertIn('href="/static/css/user-login.css"', body)
+        self.assertIn('src="/static/js/user-login.js"', body)
         self.assertIn("/api/auth/register", login_source)
         self.assertIn("/api/auth/login", login_source)
         self.assertIn("/api/wallet/login", login_source)
         self.assertIn("saveSession(payload, true)", login_source)
         self.assertIn('localStorage.setItem("user_token"', login_source)
         self.assertEqual(server_main.USER_LOGIN_TEMPLATE, "user_login.html")
-        self.assertTrue(Path("templates/user_login.html").exists())
-        self.assertTrue(Path("static/user-login.css").exists())
-        self.assertTrue(Path("static/user-login.js").exists())
-        self.assertIn('id="otherLoginModal"', Path("templates/user_login.html").read_text(encoding="utf-8"))
+        self.assertTrue(Path("app/templates/user_login.html").exists())
+        self.assertTrue(Path("app/static/css/user-login.css").exists())
+        self.assertTrue(Path("app/static/js/user-login.js").exists())
+        self.assertIn('id="otherLoginModal"', Path("app/templates/user_login.html").read_text(encoding="utf-8"))
 
     def test_user_dashboard_page_uses_user_product_apis(self):
         server_main = load_server_main(SESSION_SECRET="session-secret")
@@ -4208,7 +4342,7 @@ class MysqlConfigTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         body = response.get_data(as_text=True)
-        static_js_path = Path("static/user-dashboard.js")
+        static_js_path = Path("app/static/js/user-dashboard.js")
         dashboard_source = body + (static_js_path.read_text(encoding="utf-8") if static_js_path.exists() else "")
         for api_path in (
             "/api/auth/me",
@@ -4219,8 +4353,8 @@ class MysqlConfigTest(unittest.TestCase):
             "/api/user/withdrawals",
         ):
             self.assertIn(api_path, dashboard_source)
-        self.assertIn('href="/static/user-dashboard.css"', body)
-        self.assertIn('src="/static/user-dashboard.js"', body)
+        self.assertIn('href="/static/css/user-dashboard.css"', body)
+        self.assertIn('src="/static/js/user-dashboard.js"', body)
         self.assertIn("user_token", dashboard_source)
         self.assertIn("createShareForFile", dashboard_source)
         self.assertIn("defaultExtractCodeForFile", dashboard_source)
@@ -4238,9 +4372,9 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertIn('/api/user/files/${encodeURIComponent(fileHash)}/shares', dashboard_source)
         self.assertIn('target="_blank"', dashboard_source)
         self.assertEqual(server_main.USER_DASHBOARD_TEMPLATE, "user_dashboard.html")
-        self.assertTrue(Path("templates/user_dashboard.html").exists())
-        self.assertIn('id="shareCreateModal"', Path("templates/user_dashboard.html").read_text(encoding="utf-8"))
-        self.assertTrue(Path("static/user-dashboard.css").exists())
+        self.assertTrue(Path("app/templates/user_dashboard.html").exists())
+        self.assertIn('id="shareCreateModal"', Path("app/templates/user_dashboard.html").read_text(encoding="utf-8"))
+        self.assertTrue(Path("app/static/css/user-dashboard.css").exists())
         self.assertTrue(static_js_path.exists())
 
     def test_public_share_page_downloads_with_inline_extract_code(self):
@@ -4251,22 +4385,22 @@ class MysqlConfigTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         body = response.get_data(as_text=True)
-        share_source = body + read_static_asset_or_empty("static/public-share.js")
+        share_source = body + read_static_asset_or_empty("app/static/js/public-share.js")
         self.assertIn("下载", body)
         self.assertIn("/api/share/demo-share", body)
-        self.assertIn('href="/static/public-share.css"', body)
-        self.assertIn('src="/static/public-share.js"', body)
+        self.assertIn('href="/static/css/public-share.css"', body)
+        self.assertIn('src="/static/js/public-share.js"', body)
         self.assertIn("/api/share/${encodeURIComponent(shareCode)}/download", share_source)
         self.assertIn("extract_code", share_source)
         self.assertIn('new URLSearchParams(window.location.search).get("extract_code")', share_source)
         self.assertEqual(server_main.PUBLIC_SHARE_TEMPLATE, "public_share.html")
-        self.assertTrue(Path("templates/public_share.html").exists())
-        self.assertTrue(Path("static/public-share.css").exists())
-        self.assertTrue(Path("static/public-share.js").exists())
-        self.assertIn('shareCode: {{ share_code|tojson }}', Path("templates/public_share.html").read_text(encoding="utf-8"))
+        self.assertTrue(Path("app/templates/public_share.html").exists())
+        self.assertTrue(Path("app/static/css/public-share.css").exists())
+        self.assertTrue(Path("app/static/js/public-share.js").exists())
+        self.assertIn('shareCode: {{ share_code|tojson }}', Path("app/templates/public_share.html").read_text(encoding="utf-8"))
 
     def test_user_files_list_selects_only_current_owner(self):
-        auth = importlib.import_module("auth")
+        auth = importlib.import_module("app.services.auth")
         server_main = load_server_main(SESSION_SECRET="session-secret")
         now = server_main.datetime.now()
         token = auth.create_session_token({"user_id": 7, "username": "alice"}, "session-secret")
@@ -4325,7 +4459,7 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertIn("deleted_at is null", file_queries[-1][0])
 
     def test_user_file_upload_duplicate_returns_409_before_ipfs(self):
-        auth = importlib.import_module("auth")
+        auth = importlib.import_module("app.services.auth")
         server_main = load_server_main(SESSION_SECRET="session-secret")
         now = server_main.datetime.now()
         token = auth.create_session_token({"user_id": 7, "username": "alice"}, "session-secret")
@@ -4472,7 +4606,7 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertEqual(executed[-1][1], ("NODE_A",))
 
     def test_user_file_upload_db_failure_rolls_back(self):
-        auth = importlib.import_module("auth")
+        auth = importlib.import_module("app.services.auth")
         server_main = load_server_main(SESSION_SECRET="session-secret")
         token = auth.create_session_token({"user_id": 7, "username": "alice"}, "session-secret")
         new_hash = "b" * 64
@@ -4530,7 +4664,7 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertTrue(rolled_back)
 
     def test_user_file_upload_uses_transaction_and_restores_autocommit(self):
-        auth = importlib.import_module("auth")
+        auth = importlib.import_module("app.services.auth")
         server_main = load_server_main(SESSION_SECRET="session-secret")
         token = auth.create_session_token({"user_id": 7, "username": "alice"}, "session-secret")
         new_hash = "c" * 64
@@ -4599,7 +4733,7 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertEqual(fake_db.events[-1], ("autocommit", True))
 
     def test_user_file_upload_uses_user_nodes_when_ipfs_backup_fails(self):
-        auth = importlib.import_module("auth")
+        auth = importlib.import_module("app.services.auth")
         server_main = load_server_main(SESSION_SECRET="session-secret")
         token = auth.create_session_token({"user_id": 7, "username": "alice"}, "session-secret")
         new_hash = "f" * 64
@@ -4669,7 +4803,7 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertEqual(json.loads(insert_params[6]), ["NODE_A", "NODE_B"])
 
     def test_user_file_upload_records_shard_metadata_and_audit(self):
-        auth = importlib.import_module("auth")
+        auth = importlib.import_module("app.services.auth")
         server_main = load_server_main(SESSION_SECRET="session-secret")
         token = auth.create_session_token({"user_id": 7, "username": "alice"}, "session-secret")
         new_hash = "d" * 64
@@ -4748,7 +4882,7 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertTrue(any(params[0] == "fallback.ipfs.write.success" for params in audit_inserts))
 
     def test_user_file_upload_still_attempts_ipfs_after_real_node_success(self):
-        auth = importlib.import_module("auth")
+        auth = importlib.import_module("app.services.auth")
         server_main = load_server_main(SESSION_SECRET="session-secret")
         token = auth.create_session_token({"user_id": 7, "username": "alice"}, "session-secret")
         new_hash = "e" * 64
@@ -4810,7 +4944,7 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertEqual(events[:2], ["client", "ipfs"])
 
     def test_user_file_upload_requires_real_user_storage_nodes(self):
-        auth = importlib.import_module("auth")
+        auth = importlib.import_module("app.services.auth")
         server_main = load_server_main(SESSION_SECRET="session-secret")
         token = auth.create_session_token({"user_id": 7, "username": "alice"}, "session-secret")
 
@@ -4848,7 +4982,7 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertIn("暂无可用用户节点", response.get_json()["msg"])
 
     def test_user_file_upload_duplicate_insert_failure_returns_409(self):
-        auth = importlib.import_module("auth")
+        auth = importlib.import_module("app.services.auth")
         server_main = load_server_main(SESSION_SECRET="session-secret")
         token = auth.create_session_token({"user_id": 7, "username": "alice"}, "session-secret")
         duplicate_hash = "d" * 64
@@ -4925,7 +5059,7 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertEqual(server_main.db.events[-2:], [("rollback", False), ("autocommit", True)])
 
     def test_user_file_detail_and_delete_reject_malformed_hash(self):
-        auth = importlib.import_module("auth")
+        auth = importlib.import_module("app.services.auth")
         server_main = load_server_main(SESSION_SECRET="session-secret")
         token = auth.create_session_token({"user_id": 7, "username": "alice"}, "session-secret")
 
@@ -4965,7 +5099,7 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertEqual(file_queries, [])
 
     def test_create_share_requires_owned_file_and_hashes_extract_code(self):
-        auth = importlib.import_module("auth")
+        auth = importlib.import_module("app.services.auth")
         server_main = load_server_main(SESSION_SECRET="session-secret")
         token = auth.create_session_token({"user_id": 7, "username": "alice"}, "session-secret")
         file_hash = "a" * 64
@@ -5016,7 +5150,7 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertNotEqual(insert_params[4], "ABCD")
 
     def test_create_share_retries_duplicate_share_code_collision(self):
-        auth = importlib.import_module("auth")
+        auth = importlib.import_module("app.services.auth")
         server_main = load_server_main(SESSION_SECRET="session-secret")
         token = auth.create_session_token({"user_id": 7, "username": "alice"}, "session-secret")
         file_hash = "e" * 64
@@ -5071,7 +5205,7 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertEqual(events[-1], "commit")
 
     def test_user_shares_list_uses_current_owner_and_hides_extract_hash(self):
-        auth = importlib.import_module("auth")
+        auth = importlib.import_module("app.services.auth")
         server_main = load_server_main(SESSION_SECRET="session-secret")
         now = server_main.datetime.now()
         token = auth.create_session_token({"user_id": 7, "username": "alice"}, "session-secret")
@@ -5125,7 +5259,7 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertEqual(share_queries[-1][1], (7,))
 
     def test_update_and_delete_share_are_owner_only(self):
-        auth = importlib.import_module("auth")
+        auth = importlib.import_module("app.services.auth")
         server_main = load_server_main(SESSION_SECRET="session-secret")
         token = auth.create_session_token({"user_id": 7, "username": "alice"}, "session-secret")
 
@@ -5173,7 +5307,7 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertIn("owner_user_id=%s", update_queries[1][0])
 
     def test_update_share_returns_404_when_update_rowcount_is_zero(self):
-        auth = importlib.import_module("auth")
+        auth = importlib.import_module("app.services.auth")
         server_main = load_server_main(SESSION_SECRET="session-secret")
         token = auth.create_session_token({"user_id": 7, "username": "alice"}, "session-secret")
 
@@ -5208,7 +5342,7 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertEqual(response.get_json()["msg"], "分享不存在")
 
     def test_update_share_persists_offset_expiry_as_local_naive_datetime(self):
-        auth = importlib.import_module("auth")
+        auth = importlib.import_module("app.services.auth")
         datetime_module = importlib.import_module("datetime")
         server_main = load_server_main(SESSION_SECRET="session-secret")
         token = auth.create_session_token({"user_id": 7, "username": "alice"}, "session-secret")
@@ -5282,7 +5416,7 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertEqual(response.get_json()["msg"], "分享不存在")
 
     def test_public_share_metadata_validates_access_and_hides_extract_hash(self):
-        shares = importlib.import_module("shares")
+        shares = importlib.import_module("app.services.shares")
         server_main = load_server_main()
         now = server_main.datetime.now()
         share_hash = shares.hash_extract_code("ABCD", salt="fixedsalt")
@@ -5326,7 +5460,7 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertEqual(share["file_name"], "demo.txt")
 
     def test_public_share_verify_checks_extract_code(self):
-        shares = importlib.import_module("shares")
+        shares = importlib.import_module("app.services.shares")
         server_main = load_server_main()
         now = server_main.datetime.now()
         share_hash = shares.hash_extract_code("ABCD", salt="fixedsalt")
@@ -5368,8 +5502,8 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertTrue(correct_response.get_json()["verified"])
 
     def test_share_download_logs_download_and_point_ledger_entries(self):
-        shares = importlib.import_module("shares")
-        auth = importlib.import_module("auth")
+        shares = importlib.import_module("app.services.shares")
+        auth = importlib.import_module("app.services.auth")
         server_main = load_server_main(SESSION_SECRET="session-secret")
         now = server_main.datetime.now()
         share_hash = shares.hash_extract_code("ABCD", salt="fixedsalt")
@@ -5480,7 +5614,7 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertNotIn("rollback", events)
 
     def test_share_download_prefers_user_node_storage_before_ipfs(self):
-        shares = importlib.import_module("shares")
+        shares = importlib.import_module("app.services.shares")
         server_main = load_server_main(SESSION_SECRET="session-secret")
         now = server_main.datetime.now()
         share_hash = shares.hash_extract_code("ABCD", salt="fixedsalt")
@@ -6093,3 +6227,6 @@ class MysqlConfigTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+

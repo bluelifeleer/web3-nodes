@@ -29,7 +29,7 @@ def generate_runtime_secret(key):
 
 
 def ensure_runtime_secrets(env_path=None, environ=None, print_func=print):
-    from db import BASE_DIR
+    from app.database import BASE_DIR
 
     path = Path(env_path) if env_path else BASE_DIR / ".env"
     target_environ = environ if environ is not None else os.environ
