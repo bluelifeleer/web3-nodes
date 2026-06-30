@@ -1,4 +1,5 @@
 from datetime import datetime
+import json
 
 from flask import Blueprint, g, jsonify, request
 
@@ -10,6 +11,34 @@ def legacy_server():
     import server_main
 
     return server_main
+
+
+def parse_node_identity_lookup_payload():
+    raw_payload = None
+    upload = request.files.get("identity_file")
+    if upload:
+        raw_payload = upload.read().decode("utf-8")
+    elif request.form.get("identity_text"):
+        raw_payload = request.form.get("identity_text")
+    elif request.form.get("identity"):
+        raw_payload = request.form.get("identity")
+
+    if raw_payload is not None:
+        try:
+            payload = json.loads(raw_payload)
+        except (TypeError, ValueError):
+            return None, "节点标识文件不是有效 JSON"
+    else:
+        payload = request.get_json(silent=True) or {}
+
+    if not isinstance(payload, dict):
+        return None, "节点标识格式无效"
+    identity = payload.get("identity") if isinstance(payload.get("identity"), dict) else payload
+    user_addr = str(identity.get("user_addr") or identity.get("node_address") or "").strip()[:128]
+    node_mac = str(identity.get("node_mac") or "").strip()[:128]
+    if not user_addr or not node_mac:
+        return None, "节点标识缺少 user_addr 或 node_mac"
+    return {"user_addr": user_addr, "node_mac": node_mac}, ""
 
 
 @bp.route("/register", methods=["POST"])
@@ -144,6 +173,41 @@ def node_earnings():
     if error_response:
         return error_response
     return jsonify({"code": 200, "data": legacy.calculate_node_earnings(identity["user_addr"])})
+
+
+@bp.route("/api/node/identity/lookup", methods=["POST"])
+def node_identity_lookup():
+    legacy = legacy_server()
+    identity_request, message = parse_node_identity_lookup_payload()
+    if not identity_request:
+        return jsonify({"code": 400, "msg": message}), 400
+    row = legacy.select_node_identity_row(identity_request["user_addr"], identity_request["node_mac"])
+    if not row:
+        return jsonify({"code": 404, "msg": "节点不存在或标识不匹配", "data": {"found": False}}), 404
+    identity = legacy.format_node_identity_row(row)
+    earnings = legacy.calculate_node_earnings(identity["user_addr"])
+    legacy.current_cursor().execute(
+        """
+        select id,user_id,wallet_address,amount,status,admin_note,created_at,reviewed_at,
+        node_address,withdrawal_channel,withdrawal_account
+        from withdrawal_request
+        where node_address=%s
+        order by created_at desc,id desc
+        limit 20
+        """,
+        (identity["user_addr"],),
+    )
+    withdrawals = [legacy.format_withdrawal_row(item) for item in legacy.current_cursor().fetchall()]
+    return jsonify({
+        "code": 200,
+        "data": {
+            "found": True,
+            "identity": identity_request,
+            "node": identity,
+            "earnings": earnings,
+            "withdrawals": withdrawals,
+        },
+    })
 
 
 @bp.route("/api/node/withdrawals", methods=["GET"])

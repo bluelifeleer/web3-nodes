@@ -330,10 +330,13 @@ CLIENT_MANAGE_HTML = """
       <section class="wide">
         <h2>控制操作</h2>
         <div class="toolbar">
+          <button class="secondary" id="saveIdentityButton" type="button">保存节点标识</button>
           <button class="danger" id="stopButton" type="button">停止节点</button>
           <button class="secondary" id="restartButton" type="button">重启节点</button>
+          <button class="danger" id="uninstallButton" type="button">卸载节点服务</button>
           <span id="controlState" class="status-pill">待加载</span>
         </div>
+        <p class="muted">卸载会先保存节点标识，再删除本地加密分片、manifest 和目录锁；如有可提现或处理中收益，需要先处理收益后才能卸载。</p>
         <div id="controlMessage" class="message"></div>
       </section>
     </div>
@@ -405,6 +408,7 @@ CLIENT_MANAGE_HTML = """
       pill.textContent = isRunning ? (heartbeatOk ? "运行中" : "重连中") : "已停止";
       pill.className = "status-pill" + (isRunning ? "" : " offline");
       document.getElementById("stopButton").disabled = !isRunning;
+      document.getElementById("uninstallButton").disabled = false;
     };
     const renderStorageDirectories = (directories) => {
       const list = document.getElementById("storageDirectoryList");
@@ -596,12 +600,56 @@ CLIENT_MANAGE_HTML = """
       setMessage("controlMessage", payload.message || payload.error || "重启请求已处理", !payload.ok);
       if (payload.data) applyStatus(payload);
     }
+    async function downloadIdentityData(identity, showMessage = true){
+      const userAddr = String(identity.user_addr || "node").replace(/[^a-zA-Z0-9_-]/g, "_");
+      const serialized = JSON.stringify(identity, null, 2);
+      const blob = new Blob([serialized], {type:"application/json"});
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `web3-node-identity-${userAddr}.json`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        try { await navigator.clipboard.writeText(serialized); } catch (error) {}
+      }
+      if (showMessage) setMessage("controlMessage", "节点标识已导出，请妥善保存");
+      return true;
+    }
+    async function saveNodeIdentity(showMessage = true){
+      const payload = await api("/api/node/identity");
+      if (!payload || !payload.ok || !payload.data) {
+        setMessage("controlMessage", payload && payload.error ? payload.error : "节点标识导出失败", true);
+        return false;
+      }
+      return downloadIdentityData(payload.data, showMessage);
+    }
+    async function uninstallNode(){
+      const confirmed = confirm("确认卸载节点服务？这会删除本地加密分片、manifest 和目录锁，释放当前存储目录。若仍有可提现或处理中收益，系统会阻止卸载。");
+      if (!confirmed) return;
+      await saveNodeIdentity(false);
+      const payload = await api("/api/control/uninstall", {method:"POST", body:"{}"});
+      if (payload.ok) {
+        if (payload.data && payload.data.identity_export) await downloadIdentityData(payload.data.identity_export, false);
+        setMessage("controlMessage", payload.message || "节点服务已卸载");
+        if (payload.data) applyStatus(payload);
+        await refreshEarnings();
+        await refreshWithdrawals();
+      } else {
+        setMessage("controlMessage", payload.error || "卸载失败，请先处理节点收益", true);
+        if (payload.data && payload.data.earnings) applyEarnings({ok:true, data:payload.data.earnings, message:"请先处理节点收益"});
+      }
+    }
     window.addEventListener("load", () => {
       document.getElementById("storageForm").addEventListener("submit", updateStorage);
       document.getElementById("refreshButton").addEventListener("click", recheckStorage);
       document.getElementById("withdrawalForm").addEventListener("submit", submitWithdrawal);
+      document.getElementById("saveIdentityButton").addEventListener("click", () => saveNodeIdentity(true));
       document.getElementById("stopButton").addEventListener("click", stopNode);
       document.getElementById("restartButton").addEventListener("click", restartNode);
+      document.getElementById("uninstallButton").addEventListener("click", uninstallNode);
       refreshAll();
       startClientConsoleAutoRefresh();
     });

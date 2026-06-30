@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>节点标识查询</title>
+    <link rel="stylesheet" href="/static/css/node-lookup.css">
+</head>
+<body class="commercial-page node-lookup-page">
+    <main class="node-lookup-shell">
+        <nav class="node-lookup-nav">
+            <a href="/">首页</a>
+            <a href="/console">管理台</a>
+            <a href="/admin">管理员</a>
+        </nav>
+        <header class="node-lookup-hero">
+            <span>节点支持</span>
+            <h1>节点标识查询</h1>
+            <p>上传节点端保存的标识文件，或直接粘贴 JSON 内容，服务端会校验节点地址与设备标识并返回可用于支持处理的快照。</p>
+        </header>
+        <section class="lookup-workspace">
+            <form id="identityLookupForm" class="lookup-form" action="/api/node/identity/lookup" method="post" enctype="multipart/form-data">
+                <label for="identityText">节点标识 JSON</label>
+                <textarea id="identityText" name="identity_text" rows="10" placeholder='{"schema":"web3-node-identity","user_addr":"...","node_mac":"..."}'></textarea>
+                <label for="identityFile">上传节点标识文件</label>
+                <input id="identityFile" name="identity_file" type="file" accept="application/json,.json">
+                <div class="lookup-actions">
+                    <button type="submit">查询节点</button>
+                    <button class="secondary" id="clearLookupButton" type="button">清空</button>
+                </div>
+                <div id="lookupMessage" class="lookup-message"></div>
+            </form>
+            <section id="lookupResult" class="lookup-result" aria-live="polite">
+                <div class="empty-state">等待节点标识查询</div>
+            </section>
+        </section>
+    </main>
+    <script src="/static/js/node-lookup.js"></script>
+</body>
+</html>

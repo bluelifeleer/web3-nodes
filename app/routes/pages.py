@@ -5,6 +5,7 @@ from app.web.pages import (
     ADMIN_LOGIN_TEMPLATE,
     HOME_HTML,
     MANAGEMENT_CONSOLE_TEMPLATE,
+    NODE_LOOKUP_TEMPLATE,
     PUBLIC_SHARE_TEMPLATE,
     USER_DASHBOARD_TEMPLATE,
     USER_LOGIN_TEMPLATE,
@@ -96,6 +97,11 @@ def user_login_page():
 @bp.route("/user/dashboard")
 def user_dashboard_page():
     return render_template(USER_DASHBOARD_TEMPLATE)
+
+
+@bp.route("/node/lookup")
+def node_lookup_page():
+    return render_template(NODE_LOOKUP_TEMPLATE)
 
 
 @bp.route("/s/<share_code>")

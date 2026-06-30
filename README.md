@@ -360,12 +360,33 @@ D:\web3-node-data
 - 心跳会上报目录容量、声明容量、已用容量、可写剩余额度和本地分片 API 地址。
 - 节点控制台可动态刷新状态、收益、提现和存储目录检查结果。
 
+本地节点控制台提供“卸载节点服务”操作：
+
+- 卸载前可以点击“保存节点标识”下载 `web3-node-identity-<节点地址>.json`，文件包含 `user_addr`、`node_mac`、服务端地址、存储目录和容量等支持查询所需信息。
+- 卸载前会向服务端读取节点收益。
+- 如果仍有可提现收益、待审核提现或已审核待打款提现，卸载会被阻止，并提示先处理收益。
+- 收益处理完成后，卸载会删除用户存储目录下的 `.web3_nodes_store` 和 `.web3_nodes.lock`，清理本地加密分片、manifest 和目录锁；如果根目录已为空，会一并删除该空目录。
+- 如果用户指定目录里还有其它非节点文件，根目录会被保留并写入跳过列表，避免误删用户自己的数据。
+- 打包后的客户端会生成延迟卸载脚本，在当前进程退出后删除客户端程序目录；开发源码模式只清理节点数据，不会删除仓库源码。
+- 卸载完成后节点停止心跳并释放该目录，后续重新启动需要重新指定目录和容量。
+
+节点标识支持服务端查询：
+
+```text
+GET  /node/lookup
+POST /api/node/identity/lookup
+```
+
+`/node/lookup` 支持上传节点端保存的 JSON 文件，或粘贴 JSON 内容。服务端会校验 `user_addr + node_mac` 是否匹配已注册节点，并返回节点容量、在线状态、收益汇总和最近提现记录，用于后续客服或运营协助。
+
 客户端本地 API 只绑定 `127.0.0.1`，并校验 Host、Origin/Referer 和 CSRF token。服务端写入分片使用：
 
 ```text
+GET  /api/node/identity
 POST /api/node/storage/shards
 GET /api/node/storage/shards/<file_hash>/<chunk_index>
 GET /api/node/storage/files/<file_hash>/manifest
+POST /api/control/uninstall
 ```
 
 ## 文件存储和下载链路
@@ -450,6 +471,15 @@ POST /api/user/withdrawals
 - 客户端本地管理页是否显示目录健康。
 - 服务端后台节点列表是否显示 `storage_api_url`、可用容量和最近心跳。
 
+### 卸载节点提示需要先处理收益
+
+这是预期保护。节点卸载会清理本地分片和目录锁，因此系统会先检查节点收益：
+
+- `available_earnings` 大于 0：先在本地节点控制台提交提现。
+- `pending_withdrawals` 或 `locked_withdrawals` 大于 0：等待管理员审核和打款完成。
+- 服务端不可达或收益状态无法确认：暂时不能卸载，避免收益未处理就释放节点。
+- 卸载前建议先保存节点标识；如果以后需要服务端协助，可打开 `/node/lookup` 上传或粘贴该标识查询节点快照。
+
 ### IPFS 显示离线但 daemon 已启动
 
 先看 Kubo 实际 API 端口：
@@ -510,9 +540,10 @@ python -B -m py_compile server_main.py client\__init__.py client\main.py client\
 - 运行密钥自动生成。
 - 首页、后台、用户页、分享页模板与静态资源。
 - 客户端本地管理 API、CSRF、Host/Origin 防护。
-- 客户端目录锁定、隐藏、容量上报和心跳。
+- 客户端目录锁定、隐藏、容量上报、心跳、节点标识导出和卸载保护。
 - 用户文件上传、真实节点分片写入、IPFS 兜底。
 - 分享创建、提取码、过期/次数限制、下载积分。
+- 服务端节点标识上传/粘贴查询。
 - IPFS API 地址识别和 HTTP API 兜底。
 
 ## 后续工程建议

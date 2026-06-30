@@ -528,6 +528,33 @@ def build_node_identity_payload(state):
     }
 
 
+def build_node_identity_export(state):
+    storage_entries = normalize_storage_dirs(
+        state.get("storage_dir", ""),
+        state.get("storage_quota_gb", 0),
+        state.get("storage_dirs"),
+    )
+    program_path = str(Path(sys.executable).resolve())
+    return {
+        "schema": "web3-node-identity",
+        "schema_version": 1,
+        "user_addr": state.get("user_addr", ""),
+        "node_mac": state.get("node_mac", ""),
+        "server_url": state.get("server_url", ""),
+        "storage_dir": state.get("storage_dir", ""),
+        "storage_dirs": storage_entries,
+        "storage_quota_gb": state.get("storage_quota_gb", 0),
+        "manage_port": int(state.get("manage_port") or MANAGE_PORT),
+        "exported_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "program": {
+            "path": program_path,
+            "dir": str(Path(program_path).parent),
+            "packaged": bool(getattr(sys, "frozen", False)),
+            "platform": os.name,
+        },
+    }
+
+
 def normalize_proxy_response(response):
     status_code = int(getattr(response, "status_code", 200) or 200)
     try:
@@ -613,6 +640,184 @@ def restart_client_from_console(state):
         "ok": True,
         "message": "开发模式暂不支持自动重启，请手动重新运行 python -m client.main",
         "data": client_status_payload(state),
+    }
+
+
+def numeric_value(value):
+    try:
+        return float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def node_earnings_are_unprocessed(summary):
+    return (
+        numeric_value(summary.get("available_earnings") or summary.get("available_amount")) > 0
+        or numeric_value(summary.get("pending_withdrawals") or summary.get("pending_amount")) > 0
+        or numeric_value(summary.get("locked_withdrawals") or summary.get("locked_amount")) > 0
+    )
+
+
+def remove_node_storage_data(state):
+    removed = []
+    skipped = []
+    entries = normalize_storage_dirs(
+        state.get("storage_dir", ""),
+        state.get("storage_quota_gb", 0),
+        state.get("storage_dirs"),
+    )
+    seen_roots = set()
+    for entry in entries:
+        root = Path(entry["storage_dir"]).expanduser().resolve()
+        if str(root) in seen_roots:
+            continue
+        seen_roots.add(str(root))
+        store_dir = storage_store_dir(root).resolve()
+        lock_path = storage_lock_path(root).resolve()
+        try:
+            if store_dir.exists():
+                if root != store_dir and root in store_dir.parents:
+                    shutil.rmtree(store_dir)
+                    removed.append(str(store_dir))
+                else:
+                    skipped.append(str(store_dir))
+            if lock_path.exists():
+                if root == lock_path.parent:
+                    lock_path.unlink()
+                    removed.append(str(lock_path))
+                else:
+                    skipped.append(str(lock_path))
+            if root.exists() and root.is_dir():
+                try:
+                    next(root.iterdir())
+                    skipped.append(str(root))
+                except StopIteration:
+                    root.rmdir()
+                    removed.append(str(root))
+        except Exception as exc:
+            raise RuntimeError(f"删除节点存储数据失败：{exc}") from exc
+    return {"removed_paths": removed, "skipped_paths": skipped}
+
+
+def build_self_uninstall_script(program_path=None, pid=None, temp_dir=None, platform_name=None):
+    platform_name = platform_name or os.name
+    target_exe = Path(program_path or sys.executable).expanduser().resolve()
+    target_dir = target_exe.parent
+    process_id = int(pid or os.getpid())
+    temp_root = Path(temp_dir or tempfile.gettempdir()).expanduser().resolve()
+    suffix = "cmd" if platform_name == "nt" else "sh"
+    script_path = temp_root / f"web3-node-uninstall-{process_id}.{suffix}"
+    if platform_name == "nt":
+        content = "\n".join([
+            "@echo off",
+            "setlocal",
+            f"set \"PID={process_id}\"",
+            f"set \"TARGET_EXE={target_exe}\"",
+            f"set \"TARGET_DIR={target_dir}\"",
+            ":wait_for_exit",
+            f"tasklist /FI \"PID eq {process_id}\" | find \"{process_id}\" >nul",
+            "if not errorlevel 1 (",
+            "  timeout /t 1 /nobreak >nul",
+            "  goto wait_for_exit",
+            ")",
+            "if exist \"%TARGET_EXE%\" del /f /q \"%TARGET_EXE%\"",
+            "if exist \"%TARGET_DIR%\" rmdir /s /q \"%TARGET_DIR%\"",
+            "del /f /q \"%~f0\"",
+            "",
+        ])
+    else:
+        content = "\n".join([
+            "#!/bin/sh",
+            f"PID={process_id}",
+            f"TARGET_DIR='{target_dir}'",
+            "while kill -0 \"$PID\" 2>/dev/null; do sleep 1; done",
+            "rm -rf \"$TARGET_DIR\"",
+            "rm -f \"$0\"",
+            "",
+        ])
+    return {
+        "script_path": str(script_path),
+        "target_exe": str(target_exe),
+        "target_dir": str(target_dir),
+        "content": content,
+    }
+
+
+def packaged_self_uninstall_is_allowed(program_path=None):
+    if not getattr(sys, "frozen", False):
+        return False, "开发模式不会删除源码目录；打包后的客户端会在退出后删除程序目录"
+    target_exe = Path(program_path or sys.executable).expanduser().resolve()
+    target_dir = target_exe.parent
+    project_root = Path(__file__).resolve().parents[1]
+    if target_dir == project_root or target_dir in project_root.parents or project_root in target_dir.parents:
+        return False, "检测到程序位于源码目录内，已阻止删除源码"
+    return True, ""
+
+
+def schedule_self_uninstall(popen_func=None, timer_factory=None):
+    allowed, reason = packaged_self_uninstall_is_allowed()
+    if not allowed:
+        return {"scheduled": False, "reason": reason}
+    script = build_self_uninstall_script()
+    script_path = Path(script["script_path"])
+    script_path.write_text(script["content"], encoding="utf-8")
+    popen_func = popen_func or subprocess.Popen
+    if os.name == "nt":
+        popen_func(["cmd", "/c", str(script_path)], creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    else:
+        script_path.chmod(0o700)
+        popen_func(["/bin/sh", str(script_path)])
+    if os.getenv("WEB3_NODES_DISABLE_SELF_EXIT", "").strip().lower() not in ("1", "true", "yes", "on"):
+        timer_factory = timer_factory or threading.Timer
+        timer = timer_factory(1.5, lambda: os._exit(0))
+        timer.daemon = True
+        timer.start()
+    return {
+        "scheduled": True,
+        "script_path": str(script_path),
+        "target_dir": script["target_dir"],
+    }
+
+
+def uninstall_client_from_console(state, earnings_get_func=None, self_uninstall_func=None):
+    status_code, earnings_payload = proxy_node_get(state, "/api/node/earnings", get_func=earnings_get_func)
+    if status_code >= 400 or not earnings_payload.get("ok", False):
+        return {
+            "ok": False,
+            "code": "earnings_check_failed",
+            "error": earnings_payload.get("error") or earnings_payload.get("msg") or "无法确认节点收益状态，请稍后重试",
+            "data": {"earnings": earnings_payload.get("data")},
+        }
+    earnings = earnings_payload.get("data") or {}
+    if node_earnings_are_unprocessed(earnings):
+        return {
+            "ok": False,
+            "code": "earnings_unprocessed",
+            "error": "当前节点仍有未处理收益或处理中提现，请先提现并等待处理完成后再卸载节点服务",
+            "data": {"earnings": earnings},
+        }
+    identity_export = build_node_identity_export(state)
+    removal = remove_node_storage_data(state)
+    self_uninstall = (self_uninstall_func or schedule_self_uninstall)()
+    state["running"] = False
+    state["shutdown_requested"] = True
+    state["heartbeat_ok"] = False
+    state["storage_dir"] = ""
+    state["storage_dirs"] = []
+    state["storage_explicit"] = False
+    state["storage_quota_gb"] = 0
+    state["storage"] = inspect_storage_state("", state.get("user_addr", ""), state.get("node_mac", ""), 0, [])
+    state["last_notice"] = "节点服务已卸载，本地加密分片、manifest 和目录锁已删除"
+    self_delete_note = "；客户端程序将在当前进程退出后自动删除" if self_uninstall.get("scheduled") else f"；{self_uninstall.get('reason', '当前环境未安排删除客户端程序')}"
+    return {
+        "ok": True,
+        "message": "节点服务已卸载，本地加密分片、manifest 和目录锁已删除" + self_delete_note,
+        "data": {
+            **client_status_payload(state),
+            **removal,
+            "identity_export": identity_export,
+            "self_uninstall": self_uninstall,
+        },
     }
 
 
@@ -760,6 +965,8 @@ def make_manage_handler(state):
                 self._send_html(render_client_console_html(state["csrf_token"]))
             elif path == "/api/status":
                 self._send_json({"ok": True, "data": client_status_payload(state)})
+            elif path == "/api/node/identity":
+                self._send_json({"ok": True, "data": build_node_identity_export(state)})
             elif path.startswith("/api/node/storage/shards/"):
                 parts = path.strip("/").split("/")
                 if len(parts) != 6:
@@ -898,6 +1105,9 @@ def make_manage_handler(state):
                 self._send_json(stop_client_from_console(state))
             elif path == "/api/control/restart":
                 self._send_json(restart_client_from_console(state))
+            elif path == "/api/control/uninstall":
+                payload = uninstall_client_from_console(state)
+                self._send_json(payload, status=200 if payload.get("ok") else 409)
             elif path == "/api/withdrawals":
                 status_code, payload = proxy_node_withdrawal_create(state, data)
                 self._send_json(payload, status=status_code)

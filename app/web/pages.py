@@ -66,6 +66,7 @@ CONSOLE_SIDEBAR_HTML = '''
                 <a data-permission="user" href="/user/upload">上传文件</a>
                 <a data-permission="user" href="/user/dashboard#sharesBox">我的分享</a>
                 <a data-permission="user" href="/user/dashboard#withdrawalsBox">收益提现</a>
+                <a data-permission="user" href="/node/lookup">节点标识查询</a>
                 <a data-permission="admin" href="/admin">管理员</a>
                 <a data-permission="admin" href="/admin#nodeTable">节点管理</a>
                 <a data-permission="admin" href="/admin#storageAuditTable">审计日志</a>
@@ -186,8 +187,8 @@ HOME_HTML = '''
                 </article>
                 <article class="card commercial-card">
                     <h3>节点接入</h3>
-                    <p>客户端节点自动注册、心跳上报和断线重连，适合批量扩展存储网络。</p>
-                    <a href="/api/health">服务健康检查</a>
+                    <p>客户端节点自动注册、心跳上报和断线重连，支持用节点标识查询历史信息。</p>
+                    <a href="/api/health">服务健康检查</a> · <a href="/node/lookup">节点标识查询</a>
                 </article>
             </div>
         </div>
@@ -233,3 +234,5 @@ USER_DASHBOARD_HTML = (TEMPLATE_DIR / USER_DASHBOARD_TEMPLATE).read_text(encodin
 PUBLIC_SHARE_TEMPLATE = "public_share.html"
 PUBLIC_SHARE_HTML = (TEMPLATE_DIR / PUBLIC_SHARE_TEMPLATE).read_text(encoding="utf-8")
 
+NODE_LOOKUP_TEMPLATE = "node_lookup.html"
+NODE_LOOKUP_HTML = (TEMPLATE_DIR / NODE_LOOKUP_TEMPLATE).read_text(encoding="utf-8")

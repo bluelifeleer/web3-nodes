@@ -1425,6 +1425,7 @@ class MysqlConfigTest(unittest.TestCase):
             "node_api.node_list",
             "node_api.reward_list",
             "node_api.reward_daily",
+            "node_api.node_identity_lookup",
             "node_api.node_me",
             "node_api.node_earnings",
             "node_api.node_withdrawal_list",
@@ -1469,6 +1470,7 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertIs(server_main.parse_env_file_values, server_runtime.parse_env_file_values)
         self.assertIs(server_main.HOME_HTML, server_pages.HOME_HTML)
         self.assertIs(server_main.ADMIN_DASHBOARD_TEMPLATE, server_pages.ADMIN_DASHBOARD_TEMPLATE)
+        self.assertIs(server_main.NODE_LOOKUP_TEMPLATE, server_pages.NODE_LOOKUP_TEMPLATE)
         self.assertIs(server_main.get_ipfs_client, server_ipfs.get_ipfs_client)
         self.assertIs(server_main.HttpIPFSClient, server_ipfs.HttpIPFSClient)
         self.assertIs(server_main.format_node_record, server_nodes.format_node_record)
@@ -3257,6 +3259,291 @@ class MysqlConfigTest(unittest.TestCase):
             else:
                 sys.modules["webview"] = old_webview
 
+    def test_client_uninstall_blocks_until_node_earnings_are_processed(self):
+        old_requests = sys.modules.get("requests")
+        old_webview = sys.modules.get("webview")
+        try:
+            sys.modules["requests"] = types.SimpleNamespace(post=lambda *args, **kwargs: None, get=lambda *args, **kwargs: None)
+            sys.modules["webview"] = None
+            sys.modules.pop("client", None)
+            client_module = importlib.import_module("client")
+            with tempfile.TemporaryDirectory() as tmp:
+                storage_dir = Path(tmp)
+                client_module.prepare_storage_root(str(storage_dir), "NODE_A", "MAC_A")
+                store_dir = client_module.storage_store_dir(str(storage_dir))
+                lock_path = client_module.storage_lock_path(str(storage_dir))
+                state = client_module.create_client_state(
+                    "http://server",
+                    "NODE_A",
+                    "MAC_A",
+                    str(storage_dir),
+                    8787,
+                    storage_quota_gb=100,
+                )
+
+                response = client_module.uninstall_client_from_console(
+                    state,
+                    earnings_get_func=lambda *args, **kwargs: types.SimpleNamespace(
+                        status_code=200,
+                        json=lambda: {
+                            "code": 200,
+                            "data": {
+                                "total_earnings": 10,
+                                "withdrawn_earnings": 2,
+                                "pending_withdrawals": 0,
+                                "available_earnings": 8,
+                            },
+                        },
+                    ),
+                )
+
+                self.assertFalse(response["ok"])
+                self.assertEqual(response["code"], "earnings_unprocessed")
+                self.assertIn("请先提现", response["error"])
+                self.assertTrue(store_dir.exists())
+                self.assertTrue(lock_path.exists())
+                self.assertTrue(state["running"])
+                self.assertEqual(state["storage_dir"], str(storage_dir))
+        finally:
+            sys.modules.pop("client", None)
+            if old_requests is None:
+                sys.modules.pop("requests", None)
+            else:
+                sys.modules["requests"] = old_requests
+            if old_webview is None:
+                sys.modules.pop("webview", None)
+            else:
+                sys.modules["webview"] = old_webview
+
+    def test_client_uninstall_deletes_node_storage_data_and_releases_directory(self):
+        old_requests = sys.modules.get("requests")
+        old_webview = sys.modules.get("webview")
+        try:
+            sys.modules["requests"] = types.SimpleNamespace(post=lambda *args, **kwargs: None, get=lambda *args, **kwargs: None)
+            sys.modules["webview"] = None
+            sys.modules.pop("client", None)
+            client_module = importlib.import_module("client")
+            with tempfile.TemporaryDirectory() as tmp:
+                storage_dir = Path(tmp)
+                client_module.write_local_shard(
+                    str(storage_dir),
+                    "NODE_A",
+                    "MAC_A",
+                    "a" * 64,
+                    0,
+                    1,
+                    b"encrypted-shard",
+                    client_module.hashlib.sha256(b"encrypted-shard").hexdigest(),
+                )
+                store_dir = client_module.storage_store_dir(str(storage_dir))
+                lock_path = client_module.storage_lock_path(str(storage_dir))
+                self.assertTrue(store_dir.exists())
+                self.assertTrue(lock_path.exists())
+                state = client_module.create_client_state(
+                    "http://server",
+                    "NODE_A",
+                    "MAC_A",
+                    str(storage_dir),
+                    8787,
+                    storage_quota_gb=100,
+                )
+
+                response = client_module.uninstall_client_from_console(
+                    state,
+                    earnings_get_func=lambda *args, **kwargs: types.SimpleNamespace(
+                        status_code=200,
+                        json=lambda: {
+                            "code": 200,
+                            "data": {
+                                "total_earnings": 2,
+                                "withdrawn_earnings": 2,
+                                "pending_withdrawals": 0,
+                                "available_earnings": 0,
+                            },
+                        },
+                    ),
+                )
+
+                self.assertTrue(response["ok"])
+                self.assertFalse(store_dir.exists())
+                self.assertFalse(lock_path.exists())
+                self.assertFalse(storage_dir.exists())
+                self.assertFalse(state["running"])
+                self.assertTrue(state["shutdown_requested"])
+                self.assertEqual(state["storage_dir"], "")
+                self.assertEqual(state["storage_dirs"], [])
+                self.assertEqual(response["data"]["storage"]["storage_status"], "required")
+        finally:
+            sys.modules.pop("client", None)
+            if old_requests is None:
+                sys.modules.pop("requests", None)
+            else:
+                sys.modules["requests"] = old_requests
+            if old_webview is None:
+                sys.modules.pop("webview", None)
+            else:
+                sys.modules["webview"] = old_webview
+
+    def test_client_console_exposes_uninstall_control_with_earnings_warning(self):
+        console = importlib.import_module("client.console")
+
+        html = console.render_client_console_html("csrf-token")
+
+        self.assertIn('id="uninstallButton"', html)
+        self.assertIn('id="saveIdentityButton"', html)
+        self.assertIn("卸载节点服务", html)
+        self.assertIn("/api/control/uninstall", html)
+        self.assertIn("/api/node/identity", html)
+        self.assertIn("可提现或处理中收益", html)
+
+    def test_client_identity_export_endpoint_downloads_saved_node_info(self):
+        old_requests = sys.modules.get("requests")
+        old_webview = sys.modules.get("webview")
+        try:
+            sys.modules["requests"] = types.SimpleNamespace(post=lambda *args, **kwargs: None, get=lambda *args, **kwargs: None)
+            sys.modules["webview"] = None
+            sys.modules.pop("client", None)
+            client_module = importlib.import_module("client")
+            with tempfile.TemporaryDirectory() as tmp:
+                storage_dir = Path(tmp) / "node-store"
+                state = client_module.create_client_state(
+                    "http://server.example",
+                    "NODE_A",
+                    "MAC_A",
+                    str(storage_dir),
+                    8787,
+                    storage_quota_gb=128,
+                )
+                identity = client_module.build_node_identity_export(state)
+
+                self.assertEqual(identity["schema"], "web3-node-identity")
+                self.assertEqual(identity["user_addr"], "NODE_A")
+                self.assertEqual(identity["node_mac"], "MAC_A")
+                self.assertEqual(identity["server_url"], "http://server.example")
+                self.assertEqual(identity["manage_port"], 8787)
+                self.assertEqual(identity["storage_quota_gb"], 128)
+                self.assertEqual(identity["storage_dirs"][0]["storage_dir"], str(storage_dir))
+                self.assertIn("exported_at", identity)
+                self.assertIn("program", identity)
+                self.assertNotIn("csrf_token", json.dumps(identity))
+
+                server = client_module.ThreadingHTTPServer(
+                    ("127.0.0.1", 0),
+                    client_module.make_manage_handler(state),
+                )
+                thread = client_module.threading.Thread(target=server.serve_forever, daemon=True)
+                thread.start()
+                try:
+                    with urllib.request.urlopen(f"http://127.0.0.1:{server.server_port}/api/node/identity", timeout=5) as response:
+                        payload = json.loads(response.read().decode("utf-8"))
+                finally:
+                    server.shutdown()
+                    server.server_close()
+                    thread.join(timeout=5)
+
+                self.assertTrue(payload["ok"])
+                self.assertEqual(payload["data"]["user_addr"], "NODE_A")
+                self.assertEqual(payload["data"]["node_mac"], "MAC_A")
+        finally:
+            sys.modules.pop("client", None)
+            if old_requests is None:
+                sys.modules.pop("requests", None)
+            else:
+                sys.modules["requests"] = old_requests
+            if old_webview is None:
+                sys.modules.pop("webview", None)
+            else:
+                sys.modules["webview"] = old_webview
+
+    def test_client_uninstall_returns_identity_and_source_mode_self_delete_notice(self):
+        old_requests = sys.modules.get("requests")
+        old_webview = sys.modules.get("webview")
+        try:
+            sys.modules["requests"] = types.SimpleNamespace(post=lambda *args, **kwargs: None, get=lambda *args, **kwargs: None)
+            sys.modules["webview"] = None
+            sys.modules.pop("client", None)
+            client_module = importlib.import_module("client")
+            with tempfile.TemporaryDirectory() as tmp:
+                storage_dir = Path(tmp)
+                client_module.prepare_storage_root(str(storage_dir), "NODE_A", "MAC_A")
+                state = client_module.create_client_state(
+                    "http://server",
+                    "NODE_A",
+                    "MAC_A",
+                    str(storage_dir),
+                    8787,
+                    storage_quota_gb=100,
+                )
+
+                response = client_module.uninstall_client_from_console(
+                    state,
+                    earnings_get_func=lambda *args, **kwargs: types.SimpleNamespace(
+                        status_code=200,
+                        json=lambda: {
+                            "code": 200,
+                            "data": {
+                                "total_earnings": 2,
+                                "withdrawn_earnings": 2,
+                                "pending_withdrawals": 0,
+                                "available_earnings": 0,
+                            },
+                        },
+                    ),
+                )
+
+                self.assertTrue(response["ok"])
+                self.assertEqual(response["data"]["identity_export"]["user_addr"], "NODE_A")
+                self.assertEqual(response["data"]["identity_export"]["node_mac"], "MAC_A")
+                self.assertFalse(response["data"]["self_uninstall"]["scheduled"])
+                self.assertIn("开发模式", response["data"]["self_uninstall"]["reason"])
+        finally:
+            sys.modules.pop("client", None)
+            if old_requests is None:
+                sys.modules.pop("requests", None)
+            else:
+                sys.modules["requests"] = old_requests
+            if old_webview is None:
+                sys.modules.pop("webview", None)
+            else:
+                sys.modules["webview"] = old_webview
+
+    def test_packaged_client_self_uninstall_script_waits_then_removes_program_dir(self):
+        old_requests = sys.modules.get("requests")
+        old_webview = sys.modules.get("webview")
+        try:
+            sys.modules["requests"] = types.SimpleNamespace(post=lambda *args, **kwargs: None, get=lambda *args, **kwargs: None)
+            sys.modules["webview"] = None
+            sys.modules.pop("client", None)
+            client_module = importlib.import_module("client")
+            with tempfile.TemporaryDirectory() as tmp:
+                install_dir = Path(tmp) / "Web3Node"
+                install_dir.mkdir()
+                program_path = install_dir / "web3-node.exe"
+                program_path.write_text("exe", encoding="utf-8")
+                script = client_module.build_self_uninstall_script(
+                    str(program_path),
+                    4321,
+                    tmp,
+                    platform_name="nt",
+                )
+
+                self.assertEqual(Path(script["target_dir"]), install_dir)
+                self.assertEqual(Path(script["target_exe"]), program_path)
+                self.assertEqual(Path(script["script_path"]).parent, Path(tmp))
+                self.assertIn("PID eq 4321", script["content"])
+                self.assertIn("rmdir /s /q", script["content"])
+                self.assertIn(str(install_dir), script["content"])
+        finally:
+            sys.modules.pop("client", None)
+            if old_requests is None:
+                sys.modules.pop("requests", None)
+            else:
+                sys.modules["requests"] = old_requests
+            if old_webview is None:
+                sys.modules.pop("webview", None)
+            else:
+                sys.modules["webview"] = old_webview
+
     def test_client_console_rejects_hostile_host_without_token_exposure(self):
         old_requests = sys.modules.get("requests")
         old_webview = sys.modules.get("webview")
@@ -4216,6 +4503,125 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertLess(lock_index, paid_index)
         self.assertLess(lock_index, pending_index)
         self.assertLess(lock_index, insert_index)
+
+    def test_node_identity_lookup_accepts_pasted_identity_and_returns_support_snapshot(self):
+        server_main = load_server_main()
+        identity_time = server_main.datetime(2026, 6, 30, 9, 8, 7)
+
+        class FakeCursor:
+            def __init__(self):
+                self.last_sql = ""
+                self.executed = []
+
+            def execute(self, sql, params=None):
+                self.last_sql = sql
+                self.executed.append((sql, params))
+
+            def fetchone(self):
+                lowered = self.last_sql.lower()
+                if "from user_node" in lowered and "join node_power" in lowered:
+                    return (
+                        "NODE_A",
+                        "INVITE1",
+                        "",
+                        "MAC_A",
+                        512.0,
+                        128.0,
+                        42,
+                        8.5,
+                        identity_time,
+                        "/data/node-a",
+                        "ready",
+                        "",
+                        600.0,
+                        256.0,
+                        344.0,
+                    )
+                if "from node_reward" in lowered:
+                    return (10,)
+                if "status='paid'" in lowered:
+                    return (2,)
+                if "status in ('pending','approved')" in lowered:
+                    return (1.5,)
+                return None
+
+            def fetchall(self):
+                if "from withdrawal_request" in self.last_sql.lower():
+                    return [
+                        (7, None, "0xnode-wallet", 1.5, "pending", "", "2026-06-30 09:00:00", None, "NODE_A", "wallet", "0xnode-wallet")
+                    ]
+                return []
+
+        fake_cursor = FakeCursor()
+        server_main.cursor = fake_cursor
+        server_main.init_db = lambda: True
+
+        response = server_main.app.test_client().post(
+            "/api/node/identity/lookup",
+            json={
+                "identity": {
+                    "schema": "web3-node-identity",
+                    "user_addr": "NODE_A",
+                    "node_mac": "MAC_A",
+                    "server_url": "http://server.example",
+                }
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()["data"]
+        self.assertTrue(data["found"])
+        self.assertEqual(data["identity"]["user_addr"], "NODE_A")
+        self.assertEqual(data["node"]["storage_path"], "/data/node-a")
+        self.assertEqual(data["node"]["storage_total_gb"], 600.0)
+        self.assertEqual(data["earnings"]["available_earnings"], 6.5)
+        self.assertEqual(data["withdrawals"][0]["id"], 7)
+
+    def test_node_identity_lookup_accepts_uploaded_identity_file(self):
+        server_main = load_server_main()
+
+        class FakeCursor:
+            def __init__(self):
+                self.last_sql = ""
+
+            def execute(self, sql, params=None):
+                self.last_sql = sql
+
+            def fetchone(self):
+                lowered = self.last_sql.lower()
+                if "from user_node" in lowered and "join node_power" in lowered:
+                    return ("NODE_A", "INVITE1", "", "MAC_A", 0, 0, 0, 0, None, "", "ready", "", 0, 0, 0)
+                return (0,)
+
+            def fetchall(self):
+                return []
+
+        server_main.cursor = FakeCursor()
+        server_main.init_db = lambda: True
+        identity_file = io.BytesIO(json.dumps({"user_addr": "NODE_A", "node_mac": "MAC_A"}).encode("utf-8"))
+
+        response = server_main.app.test_client().post(
+            "/api/node/identity/lookup",
+            data={"identity_file": (identity_file, "web3-node-identity.json")},
+            content_type="multipart/form-data",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["data"]["identity"]["node_mac"], "MAC_A")
+
+    def test_node_lookup_page_provides_upload_and_paste_support_ui(self):
+        server_main = load_server_main()
+        server_main.init_db = lambda: self.fail("node lookup page should not require database")
+
+        response = server_main.app.test_client().get("/node/lookup")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn('id="identityText"', body)
+        self.assertIn('id="identityFile"', body)
+        self.assertIn("/api/node/identity/lookup", body)
+        self.assertIn('href="/static/css/node-lookup.css"', body)
+        self.assertIn('src="/static/js/node-lookup.js"', body)
 
     def test_admin_withdrawals_requires_admin_token(self):
         server_main = load_server_main(ADMIN_API_TOKEN="secret-token")
@@ -6288,6 +6694,3 @@ class MysqlConfigTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
-
-
