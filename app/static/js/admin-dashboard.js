@@ -1,5 +1,6 @@
 const ADMIN_DASHBOARD_CONFIG = window.ADMIN_DASHBOARD_CONFIG || {};
 const AMAP_WEB_KEY = ADMIN_DASHBOARD_CONFIG.amapWebKey || "";
+const CONFIG_BUSINESS_MODE = ADMIN_DASHBOARD_CONFIG.businessMode || "storage_share";
 const ADMIN_REFRESH_INTERVAL_MS = 10000;
 let adminRefreshTimer = null;
 const withdrawalNoteDrafts = {};
@@ -49,6 +50,50 @@ function adminFetch(url, options){
             setAdminTokenStatus("Token 验证通过", false);
         }
         return res;
+    });
+}
+
+function getBusinessMode(){
+    const shell = document.querySelector(".unified-console-shell");
+    return shell ? shell.dataset.businessMode || CONFIG_BUSINESS_MODE : CONFIG_BUSINESS_MODE;
+}
+
+function renderPcdnTasks(rows){
+    const table = document.getElementById("pcdnTaskTable");
+    if(!table){ return; }
+    table.innerHTML = (rows || []).map(item => `<tr><td>${escHtml(item.task_name || "")}</td><td>${escHtml(item.resource_url || item.domain || "")}</td><td>${escHtml(item.vendor_task_id || "")}</td><td>${escHtml(item.status || "")}</td><td>${escHtml(item.provider || "")}</td></tr>`).join("") || '<tr><td colspan="5">暂无 PCDN 任务</td></tr>';
+}
+
+function renderPcdnMetrics(rows){
+    const table = document.getElementById("pcdnMetricTable");
+    if(!table){ return; }
+    table.innerHTML = (rows || []).map(item => `<tr><td>${escHtml(item.node_address || "")}</td><td>${escHtml(item.traffic_gb || 0)}</td><td>${escHtml(item.bandwidth_mbps || 0)}</td><td>${escHtml(item.online_minutes || 0)}</td><td>${escHtml(item.cache_hit_rate || 0)}</td></tr>`).join("") || '<tr><td colspan="5">暂无 PCDN 指标</td></tr>';
+}
+
+function refreshPcdnDashboard(){
+    if(getBusinessMode() !== "pcdn_partner"){ return; }
+    adminFetch("/api/pcdn/tasks").then(res=>res.json()).then(data=>renderPcdnTasks(data.data || []));
+    adminFetch("/api/pcdn/node_metrics").then(res=>res.json()).then(data=>renderPcdnMetrics(data.data || []));
+    adminFetch("/api/pcdn/status").then(res=>res.json()).then(data=>{
+        const log = document.getElementById("pcdnSyncLog");
+        if(log){ log.innerText = JSON.stringify(data.data || {}, null, 2); }
+    });
+}
+
+function syncPcdnUsage(){
+    adminFetch("/api/pcdn/sync", {method:"POST", headers:{"Content-Type":"application/json"}, body:"{}"})
+    .then(res=>res.json()).then(data=>{
+        const log = document.getElementById("pcdnSyncLog");
+        if(log){ log.innerText = JSON.stringify(data, null, 2); }
+        refreshPcdnDashboard();
+    });
+}
+
+function runPcdnSettlement(){
+    adminFetch("/api/pcdn/settlements/run", {method:"POST", headers:{"Content-Type":"application/json"}, body:"{}"})
+    .then(res=>res.json()).then(data=>{
+        const log = document.getElementById("pcdnSyncLog");
+        if(log){ log.innerText = JSON.stringify(data, null, 2); }
     });
 }
 
@@ -442,15 +487,19 @@ function loadNodeMap(){
 
 function refreshAdminData(){
     getNodes();
-    getReward();
-    getFileList();
-    getIpfsStatus();
-    getLeaderboard();
-    getDailyReward();
-    getInviteTree();
     getAdminWithdrawals();
-    getStorageAuditLogs();
-    if(map){ loadNodeMap(); }
+    if(getBusinessMode() === "pcdn_partner"){
+        refreshPcdnDashboard();
+    }else{
+        getReward();
+        getFileList();
+        getIpfsStatus();
+        getLeaderboard();
+        getDailyReward();
+        getInviteTree();
+        getStorageAuditLogs();
+        if(map){ loadNodeMap(); }
+    }
     setAdminAutoRefreshStatus(`自动刷新中｜上次刷新 ${new Date().toLocaleTimeString()}`);
 }
 

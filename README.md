@@ -135,6 +135,37 @@ NODE_STORAGE_API_URL_TEMPLATE=http://127.0.0.1:{port}
 - 高德地图配置两项都存在时才加载地图 SDK，否则后台降级为普通节点看板。
 - IPFS API 地址优先读取 `IPFS_API_ADDR` / `IPFS_API_MULTIADDR` / `IPFS_API_URL`，未配置时会尝试 `ipfs config Addresses.API`，最后才退回 `127.0.0.1:5001`。
 
+## 业务模式切换
+
+平台现在支持两种隔离业务模式，通过配置快速切换：
+
+- `storage_share`：默认模式，保留当前加密文件上传、分片存储、分享链接、下载校验、IPFS 兜底和文件型节点收益。
+- `pcdn_partner`：第三方 PCDN 对接模式。当前第一阶段使用 `mock` 厂商适配器，本地即可验证 PCDN 任务、节点指标、结算收益和提现链路，不需要真实厂商凭证。
+
+启动 PCDN mock 模式：
+
+```powershell
+$env:BUSINESS_MODE="pcdn_partner"
+$env:PCDN_PROVIDER="mock"
+python .\server_main.py
+```
+
+切回原文件存储分享模式：
+
+```powershell
+$env:BUSINESS_MODE="storage_share"
+python .\server_main.py
+```
+
+客户端节点在 PCDN 模式下仍复用本地目录与容量上报能力，但页面语义会切换为缓存目录：
+
+```powershell
+$env:NODE_BUSINESS_MODE="pcdn_partner"
+python .\client\main.py --storage-dir=D:\pcdn-cache --storage_quota_gb=100
+```
+
+当前 PCDN API 使用后台 token 保护，管理台在 `pcdn_partner` 模式会展示 PCDN 任务、厂商指标同步和结算入口；在 `storage_share` 模式则隐藏 PCDN 业务项。
+
 ## 数据库初始化
 
 服务端启动时会自动初始化数据库和表结构。一般不需要手动执行 SQL。
@@ -255,8 +286,14 @@ http://127.0.0.1:8000/user/login
 支持：
 
 - 用户名密码注册/登录。
-- 钱包 nonce 签名登录。
+- 浏览器钱包连接登录：支持 MetaMask、OKX Wallet 等注入 `window.ethereum` 的 EVM 钱包，页面会自动获取地址、请求 nonce、调用 `personal_sign` 并提交 `/api/wallet/login`。
+- 手动钱包 nonce 签名登录：没有浏览器钱包时，可手动填写钱包地址、nonce 和签名作为兜底。
 - 登录后 token 保存为 `localStorage.user_token`。
+
+钱包绑定：
+
+- 登录后在 `/user/dashboard` 的“钱包绑定”区域点击“连接钱包并绑定”，页面会自动连接浏览器钱包、获取绑定 nonce、调用 `personal_sign` 并提交 `/api/wallet/bind`。
+- 钱包登录只允许已绑定钱包的用户登录；新用户需要先注册/登录账号，再在用户面板绑定钱包。
 
 上传：
 
@@ -317,6 +354,13 @@ copy client\node_config.example.json node_config.json
 
 ```powershell
 python -m client.main --storage-dir=D:\web3-node-data --storage-quota-gb=100 --manage-port=8787
+```
+
+也可以进入 `client` 目录直接运行脚本，参数名支持中划线和下划线两种形式：
+
+```powershell
+cd client
+python .\main.py --storage-dir=D:\web3-node-data --storage_quota_gb=100 --manage-port=8787
 ```
 
 也可以用环境变量：

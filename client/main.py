@@ -17,6 +17,13 @@ import os
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
+
+if __package__ in (None, ""):
+    project_root = Path(__file__).resolve().parents[1]
+    project_root_text = str(project_root)
+    if project_root_text not in sys.path:
+        sys.path.insert(0, project_root_text)
+
 try:
     import webview
 except Exception:
@@ -451,7 +458,7 @@ def select_storage_dir_for_shard(state, file_hash="", chunk_index=0):
     return entries[validate_chunk_index(chunk_index) % len(entries)]["storage_dir"]
 
 
-def create_client_state(server_url, user_addr, node_mac, storage_dir, manage_port, storage_quota_gb=0, storage_explicit=True, storage_dirs=None):
+def create_client_state(server_url, user_addr, node_mac, storage_dir, manage_port, storage_quota_gb=0, storage_explicit=True, storage_dirs=None, business_mode="storage_share"):
     normalized_dirs = normalize_storage_dirs(storage_dir, storage_quota_gb, storage_dirs)
     primary_dir = normalized_dirs[0]["storage_dir"] if normalized_dirs else storage_dir
     total_quota = round(sum(float(item.get("storage_quota_gb") or 0) for item in normalized_dirs), 2)
@@ -464,6 +471,7 @@ def create_client_state(server_url, user_addr, node_mac, storage_dir, manage_por
         "storage_explicit": storage_explicit,
         "storage_quota_gb": total_quota,
         "manage_port": manage_port,
+        "business_mode": business_mode or "storage_share",
         "csrf_token": secrets.token_urlsafe(24),
         "running": True,
         "heartbeat_ok": False,
@@ -488,6 +496,7 @@ def client_status_payload(state):
         "storage_dirs": state.get("storage_dirs", []),
         "storage_explicit": state.get("storage_explicit", True),
         "storage_quota_gb": state.get("storage_quota_gb", 0),
+        "business_mode": state.get("business_mode", "storage_share"),
         "storage": state["storage"],
         "stored_files": list_local_stored_files(state),
     }
@@ -1214,6 +1223,7 @@ def client_run():
     NODE_STORAGE_DIR = storage_dir_arg or config["storage_dir"]
     storage_explicit = bool(storage_dir_arg or config.get("storage_explicit"))
     storage_quota_gb = get_storage_quota_arg() or float(config.get("storage_quota_gb") or 0)
+    business_mode = config.get("business_mode", "storage_share")
     MANAGE_PORT = get_manage_port_arg() or int(config["manage_port"])
     if NODE_STORAGE_DIR:
         safe_print(f"📁 节点存储目录：{Path(NODE_STORAGE_DIR).expanduser()}")
@@ -1230,6 +1240,7 @@ def client_run():
         MANAGE_PORT,
         storage_quota_gb,
         storage_explicit,
+        business_mode=business_mode,
     )
     manage_server = None
     try:

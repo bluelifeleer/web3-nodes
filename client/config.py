@@ -10,6 +10,7 @@ DEFAULT_HEARTBEAT_INTERVAL = 60
 DEFAULT_RECONNECT_INTERVAL = 10
 DEFAULT_NODE_STORAGE_DIR = ""
 DEFAULT_MANAGE_PORT = 8787
+DEFAULT_BUSINESS_MODE = "storage_share"
 
 
 def load_client_config(config_path="node_config.json"):
@@ -23,6 +24,7 @@ def load_client_config(config_path="node_config.json"):
         "storage_explicit": False,
         "storage_quota_gb": 0,
         "manage_port": DEFAULT_MANAGE_PORT,
+        "business_mode": DEFAULT_BUSINESS_MODE,
     }
     path = Path(config_path)
     if path.exists():
@@ -46,6 +48,11 @@ def load_client_config(config_path="node_config.json"):
     config["storage_explicit"] = storage_explicit
     config["storage_quota_gb"] = float(os.getenv("NODE_STORAGE_QUOTA_GB", config.get("storage_quota_gb") or 0) or 0)
     config["manage_port"] = int(os.getenv("NODE_MANAGE_PORT", config["manage_port"]))
+    config["business_mode"] = (
+        os.getenv("NODE_BUSINESS_MODE", os.getenv("BUSINESS_MODE", config.get("business_mode", DEFAULT_BUSINESS_MODE)))
+        .strip()
+        or DEFAULT_BUSINESS_MODE
+    )
     return config
 
 

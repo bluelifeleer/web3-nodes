@@ -18,12 +18,69 @@ CLIENT_MANAGE_HTML = """
       color: #14213d;
     }
     main {
-      max-width: 1100px;
+      max-width: 1260px;
       margin: 0 auto;
       padding: 24px;
     }
     .node-console-shell {
-      max-width: 1180px;
+      max-width: 1260px;
+    }
+    .node-console-layout {
+      display: grid;
+      grid-template-columns: 236px minmax(0, 1fr);
+      gap: 18px;
+      align-items: start;
+    }
+    .node-console-sidebar {
+      position: sticky;
+      top: 18px;
+      min-height: calc(100vh - 48px);
+      border: 1px solid #d8e2ef;
+      border-radius: 8px;
+      background: #ffffff;
+      padding: 16px;
+      box-shadow: 0 10px 30px rgba(20, 33, 61, 0.06);
+    }
+    .node-console-brand {
+      display: grid;
+      gap: 4px;
+      margin-bottom: 16px;
+    }
+    .node-console-brand strong {
+      font-size: 18px;
+    }
+    .node-console-brand span {
+      color: #6b7a90;
+      font-size: 13px;
+    }
+    .node-console-sidebar nav {
+      display: grid;
+      gap: 6px;
+    }
+    .side-nav-title {
+      margin: 14px 0 4px;
+      color: #6b7a90;
+      font-size: 12px;
+      font-weight: 800;
+    }
+    .side-nav-title:first-child {
+      margin-top: 0;
+    }
+    .node-console-sidebar a {
+      display: flex;
+      align-items: center;
+      min-height: 36px;
+      border-radius: 8px;
+      padding: 8px 10px;
+      color: #17325c;
+      text-decoration: none;
+    }
+    .node-console-sidebar a:hover {
+      background: #eef3fb;
+      color: #1769ff;
+    }
+    .node-console-content {
+      min-width: 0;
     }
     h1 {
       margin: 0 0 10px;
@@ -197,8 +254,54 @@ CLIENT_MANAGE_HTML = """
       font-size: 12px;
       font-weight: 700;
     }
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      background: rgba(20, 33, 61, .46);
+      z-index: 30;
+    }
+    .modal-backdrop[hidden] {
+      display: none;
+    }
+    .uninstall-modal {
+      width: min(560px, 100%);
+      border: 1px solid #f2b8b5;
+      border-radius: 8px;
+      background: #ffffff;
+      padding: 20px;
+      box-shadow: 0 24px 60px rgba(20, 33, 61, .22);
+    }
+    .uninstall-modal h2 {
+      color: #9f1f17;
+    }
+    .uninstall-warning-list {
+      margin: 12px 0;
+      padding-left: 20px;
+      color: #4f5d75;
+      line-height: 1.7;
+    }
+    .modal-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 10px;
+      margin-top: 16px;
+      flex-wrap: wrap;
+    }
     @media (max-width: 720px) {
       main { padding: 16px; }
+      .node-console-layout { grid-template-columns: 1fr; }
+      .node-console-sidebar {
+        position: relative;
+        top: auto;
+        min-height: auto;
+      }
+      .node-console-sidebar nav {
+        grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+      }
       .node-hero-grid { grid-template-columns: 1fr; }
       h1 { font-size: 26px; }
       .list li {
@@ -210,12 +313,32 @@ CLIENT_MANAGE_HTML = """
       }
     }
   </style>
-  <main class="node-console-shell">
+  <main class="node-console-shell" data-business-mode="storage_share">
+    <div class="node-console-layout">
+    <aside class="node-console-sidebar">
+      <div class="node-console-brand">
+        <strong>节点控制台</strong>
+        <span>本机服务管理</span>
+      </div>
+      <nav>
+        <span class="side-nav-title">节点状态</span>
+        <a href="#runtimeSection">运行概览</a>
+        <a href="#storageHealthSection">目录健康</a>
+        <span class="side-nav-title">相关目录</span>
+        <a href="#storageSection" data-storage-nav>存储目录管理</a>
+        <a href="#localShardSection" data-local-shard-nav>本机已存文件</a>
+        <span class="side-nav-title">收益与操作</span>
+        <a href="#earningsSection">收益概览</a>
+        <a href="#withdrawalSection">提现记录</a>
+        <a href="#controlSection">控制操作</a>
+      </nav>
+    </aside>
+    <div class="node-console-content">
     <h1>节点控制台</h1>
     <p class="subhead">本地管理页只访问本机接口，不直接暴露服务端地址。<span id="autoRefreshState" class="auto-refresh-state">自动刷新待启动</span></p>
 
     <div class="grid node-hero-grid">
-      <section>
+      <section id="runtimeSection">
         <h2>运行概览</h2>
         <div class="stats node-kpi-board">
           <div class="stat">
@@ -237,7 +360,7 @@ CLIENT_MANAGE_HTML = """
         </div>
       </section>
 
-      <section>
+      <section id="storageHealthSection">
         <h2>目录健康与容量</h2>
         <div class="stats node-kpi-board">
           <div class="stat">
@@ -260,8 +383,11 @@ CLIENT_MANAGE_HTML = """
         <div class="muted mono" id="storagePath">-</div>
       </section>
 
-      <section class="wide">
+      <section class="wide" id="storageSection">
         <h2>存储目录管理</h2>
+        <span hidden data-storage-label="storage">存储目录</span>
+        <span hidden data-storage-label="pcdn">PCDN 缓存目录</span>
+        <span hidden>Cache directory</span>
         <form id="storageForm">
           <input id="storageDirInput" name="storage_dir" placeholder="输入新的本地存储目录，例如 D:\\web3-node-data" />
           <input id="storageQuotaInput" name="storage_quota_gb" inputmode="decimal" placeholder="目录可用容量 GB，必填" />
@@ -274,7 +400,7 @@ CLIENT_MANAGE_HTML = """
         <div id="storageMessage" class="message"></div>
       </section>
 
-      <section>
+      <section id="earningsSection">
         <h2>收益概览</h2>
         <div class="stats">
           <div class="stat">
@@ -297,7 +423,7 @@ CLIENT_MANAGE_HTML = """
         <div id="earningsMessage" class="message"></div>
       </section>
 
-      <section>
+      <section id="withdrawalCreateSection">
         <h2>提交提现</h2>
         <form id="withdrawalForm">
           <input id="withdrawalAmount" name="amount" placeholder="提现金额" />
@@ -313,21 +439,21 @@ CLIENT_MANAGE_HTML = """
         <div id="withdrawalMessage" class="message"></div>
       </section>
 
-      <section class="wide">
+      <section class="wide" id="withdrawalSection">
         <h2>提现记录</h2>
         <ul id="withdrawalList" class="list">
           <li><span class="muted">加载中...</span></li>
         </ul>
       </section>
 
-      <section class="wide">
+      <section class="wide" id="localShardSection">
         <h2>本机已存文件 <span id="localShardUsage" class="usage-meter">0 B</span></h2>
         <ul id="localShardList" class="list">
           <li><span class="muted">暂无本机分片</span></li>
         </ul>
       </section>
 
-      <section class="wide">
+      <section class="wide" id="controlSection">
         <h2>控制操作</h2>
         <div class="toolbar">
           <button class="secondary" id="saveIdentityButton" type="button">保存节点标识</button>
@@ -340,7 +466,24 @@ CLIENT_MANAGE_HTML = """
         <div id="controlMessage" class="message"></div>
       </section>
     </div>
+    </div>
+    </div>
   </main>
+  <div class="modal-backdrop" id="uninstallModal" hidden>
+    <section class="uninstall-modal" role="dialog" aria-modal="true" aria-labelledby="uninstallModalTitle">
+      <h2 id="uninstallModalTitle">确认卸载节点服务</h2>
+      <p class="muted">卸载前会先导出节点标识，便于以后拿节点标识向服务端查询和处理问题。</p>
+      <ul class="uninstall-warning-list">
+        <li>删除本地加密分片、manifest 和目录锁。</li>
+        <li>释放当前用户指定的存储目录。</li>
+        <li>如有可提现收益或处理中提现，系统会阻止卸载。</li>
+      </ul>
+      <div class="modal-actions">
+        <button class="secondary" id="uninstallCancelButton" type="button">取消</button>
+        <button class="danger" id="uninstallConfirmButton" type="button">确认卸载</button>
+      </div>
+    </section>
+  </div>
   <script>
     const CSRF_TOKEN = "__CSRF_TOKEN__";
     const CLIENT_CONSOLE_REFRESH_INTERVAL_MS = 5000;
@@ -388,6 +531,7 @@ CLIENT_MANAGE_HTML = """
         return;
       }
       const data = payload.data || {};
+      applyBusinessModeLabels(data.business_mode || "storage_share");
       const storage = data.storage || {};
       const isRunning = !!data.running;
       const heartbeatOk = !!data.heartbeat_ok;
@@ -410,6 +554,21 @@ CLIENT_MANAGE_HTML = """
       document.getElementById("stopButton").disabled = !isRunning;
       document.getElementById("uninstallButton").disabled = false;
     };
+    function applyBusinessModeLabels(mode){
+      const normalized = mode === "pcdn_partner" ? "pcdn_partner" : "storage_share";
+      const shell = document.querySelector(".node-console-shell");
+      if (shell) shell.dataset.businessMode = normalized;
+      const storageNav = document.querySelector("[data-storage-nav]");
+      if (storageNav) storageNav.textContent = normalized === "pcdn_partner" ? "PCDN 缓存目录" : "存储目录管理";
+      const shardNav = document.querySelector("[data-local-shard-nav]");
+      if (shardNav) shardNav.textContent = normalized === "pcdn_partner" ? "本机缓存记录" : "本机已存文件";
+      const storageTitle = document.querySelector("#storageSection h2");
+      if (storageTitle) storageTitle.textContent = normalized === "pcdn_partner" ? "PCDN 缓存目录管理" : "存储目录管理";
+      const localTitle = document.querySelector("#localShardSection h2");
+      if (localTitle) localTitle.innerHTML = normalized === "pcdn_partner"
+        ? '本机缓存记录 <span id="localShardUsage" class="usage-meter">0 B</span>'
+        : '本机已存文件 <span id="localShardUsage" class="usage-meter">0 B</span>';
+    }
     const renderStorageDirectories = (directories) => {
       const list = document.getElementById("storageDirectoryList");
       list.innerHTML = "";
@@ -626,9 +785,16 @@ CLIENT_MANAGE_HTML = """
       }
       return downloadIdentityData(payload.data, showMessage);
     }
-    async function uninstallNode(){
-      const confirmed = confirm("确认卸载节点服务？这会删除本地加密分片、manifest 和目录锁，释放当前存储目录。若仍有可提现或处理中收益，系统会阻止卸载。");
-      if (!confirmed) return;
+    function openUninstallModal(){
+      const modal = document.getElementById("uninstallModal");
+      if (modal) modal.hidden = false;
+    }
+    function closeUninstallModal(){
+      const modal = document.getElementById("uninstallModal");
+      if (modal) modal.hidden = true;
+    }
+    async function confirmUninstallNode(){
+      closeUninstallModal();
       await saveNodeIdentity(false);
       const payload = await api("/api/control/uninstall", {method:"POST", body:"{}"});
       if (payload.ok) {
@@ -649,7 +815,12 @@ CLIENT_MANAGE_HTML = """
       document.getElementById("saveIdentityButton").addEventListener("click", () => saveNodeIdentity(true));
       document.getElementById("stopButton").addEventListener("click", stopNode);
       document.getElementById("restartButton").addEventListener("click", restartNode);
-      document.getElementById("uninstallButton").addEventListener("click", uninstallNode);
+      document.getElementById("uninstallButton").addEventListener("click", openUninstallModal);
+      document.getElementById("uninstallCancelButton").addEventListener("click", closeUninstallModal);
+      document.getElementById("uninstallConfirmButton").addEventListener("click", confirmUninstallNode);
+      document.getElementById("uninstallModal").addEventListener("click", (event) => {
+        if (event.target && event.target.id === "uninstallModal") closeUninstallModal();
+      });
       refreshAll();
       startClientConsoleAutoRefresh();
     });

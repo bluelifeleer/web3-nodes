@@ -35,6 +35,8 @@ def admin_index():
         ADMIN_DASHBOARD_TEMPLATE,
         amap_web_key=legacy.AMAP_WEB_KEY if amap_enabled else "",
         amap_security_jscode=legacy.AMAP_SECURITY_JSCODE if amap_enabled else "",
+        business_mode=legacy.SERVER_CONFIG.business_mode,
+        pcdn_provider=legacy.SERVER_CONFIG.pcdn_provider,
     )
 
 

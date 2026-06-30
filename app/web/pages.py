@@ -51,6 +51,8 @@ CONSOLE_SHELL_CSS = '''
         .console-sidebar a:hover{background:rgba(255,255,255,.08);border-color:rgba(255,255,255,.12);}
         .console-sidebar [data-permission="admin"]{box-shadow:inset 3px 0 0 rgba(240,180,41,.9);}
         .console-sidebar [data-permission="user"]{box-shadow:inset 3px 0 0 rgba(20,184,166,.9);}
+        .unified-console-shell[data-console-role="admin"] [data-permission="user"]{display:none;}
+        .unified-console-shell[data-console-role="user"] [data-permission="admin"]{display:none;}
         .console-main{min-width:0;padding:0;}
         .console-topbar{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:16px;padding:12px 14px;border:1px solid rgba(148,163,184,.26);border-radius:8px;background:rgba(255,255,255,.76);}
         .console-permission-note{color:#64748b;font-size:13px;}
@@ -66,9 +68,9 @@ CONSOLE_SIDEBAR_HTML = '''
                 <a data-permission="user" href="/user/upload">上传文件</a>
                 <a data-permission="user" href="/user/dashboard#sharesBox">我的分享</a>
                 <a data-permission="user" href="/user/dashboard#withdrawalsBox">收益提现</a>
-                <a data-permission="user" href="/node/lookup">节点标识查询</a>
                 <a data-permission="admin" href="/admin">管理员</a>
                 <a data-permission="admin" href="/admin#nodeTable">节点管理</a>
+                <a data-permission="admin" href="/node/lookup">节点标识查询</a>
                 <a data-permission="admin" href="/admin#storageAuditTable">审计日志</a>
                 <a data-permission="admin" href="/admin#fileTable">文件存证</a>
             </nav>

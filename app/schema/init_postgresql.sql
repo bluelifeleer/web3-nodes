@@ -198,3 +198,64 @@ CREATE INDEX IF NOT EXISTS idx_point_user ON point_ledger (user_id);
 CREATE INDEX IF NOT EXISTS idx_point_wallet ON point_ledger (wallet_address);
 CREATE INDEX IF NOT EXISTS idx_withdrawal_user ON withdrawal_request (user_id);
 CREATE INDEX IF NOT EXISTS idx_withdrawal_status ON withdrawal_request (status);
+
+CREATE TABLE IF NOT EXISTS pcdn_task (
+    id serial PRIMARY KEY,
+    task_name varchar(128) DEFAULT '',
+    provider varchar(64) DEFAULT 'mock',
+    vendor_task_id varchar(128) DEFAULT '',
+    resource_url varchar(512) DEFAULT '',
+    domain varchar(255) DEFAULT '',
+    status varchar(32) DEFAULT 'created',
+    created_by varchar(128) DEFAULT '',
+    created_at timestamp DEFAULT CURRENT_TIMESTAMP,
+    updated_at timestamp DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_pcdn_task_provider ON pcdn_task (provider);
+CREATE INDEX IF NOT EXISTS idx_pcdn_task_vendor ON pcdn_task (vendor_task_id);
+
+CREATE TABLE IF NOT EXISTS pcdn_node_metric (
+    id serial PRIMARY KEY,
+    provider varchar(64) DEFAULT 'mock',
+    vendor_task_id varchar(128) DEFAULT '',
+    node_address varchar(128) DEFAULT '',
+    resource_url varchar(512) DEFAULT '',
+    domain varchar(255) DEFAULT '',
+    bandwidth_mbps double precision DEFAULT 0,
+    traffic_gb double precision DEFAULT 0,
+    online_minutes double precision DEFAULT 0,
+    cache_hit_rate double precision DEFAULT 0,
+    started_at timestamp DEFAULT NULL,
+    ended_at timestamp DEFAULT NULL,
+    raw_payload_json text,
+    created_at timestamp DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_pcdn_metric_node ON pcdn_node_metric (node_address);
+CREATE INDEX IF NOT EXISTS idx_pcdn_metric_task ON pcdn_node_metric (vendor_task_id);
+
+CREATE TABLE IF NOT EXISTS pcdn_settlement (
+    id serial PRIMARY KEY,
+    provider varchar(64) DEFAULT 'mock',
+    vendor_task_id varchar(128) DEFAULT '',
+    node_address varchar(128) DEFAULT '',
+    metric_window varchar(64) DEFAULT '',
+    contribution_score double precision DEFAULT 0,
+    amount double precision DEFAULT 0,
+    status varchar(32) DEFAULT 'pending',
+    created_at timestamp DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_pcdn_settlement_node ON pcdn_settlement (node_address);
+CREATE INDEX IF NOT EXISTS idx_pcdn_settlement_task ON pcdn_settlement (vendor_task_id);
+
+CREATE TABLE IF NOT EXISTS pcdn_provider_sync_log (
+    id serial PRIMARY KEY,
+    provider varchar(64) DEFAULT 'mock',
+    sync_type varchar(64) DEFAULT '',
+    status varchar(32) DEFAULT '',
+    message varchar(512) DEFAULT '',
+    request_id varchar(128) DEFAULT '',
+    raw_summary_json text,
+    created_at timestamp DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_pcdn_sync_provider ON pcdn_provider_sync_log (provider);
+CREATE INDEX IF NOT EXISTS idx_pcdn_sync_status ON pcdn_provider_sync_log (status);

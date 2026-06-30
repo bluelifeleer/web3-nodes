@@ -63,6 +63,8 @@
         </section>
         <section class="panel auth-panel" id="walletPanel" data-auth-panel="wallet">
             <h2>钱包登录</h2>
+            <button type="button" class="secondary" id="connectWalletLoginButton">连接钱包并登录</button>
+            <div class="hint" id="walletProviderStatus">支持 MetaMask、OKX Wallet 等注入 `window.ethereum` 的浏览器钱包。</div>
             <form id="walletLoginForm">
                 <label>钱包地址
                     <input id="walletAddress" placeholder="0x..." required>
@@ -133,4 +135,3 @@
     <script src="/static/js/user-login.js"></script>
 </body>
 </html>
-

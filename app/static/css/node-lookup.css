@@ -26,6 +26,20 @@ a {
     text-decoration: none;
 }
 
+.unified-console-shell{display:grid;grid-template-columns:248px minmax(0,1fr);min-height:100vh;background:#eef4f7;}
+.console-sidebar{position:sticky;top:0;height:100vh;padding:18px;background:#102a36;color:#e8f8f2;overflow:auto;}
+.console-brand{display:flex;align-items:center;gap:10px;font-weight:900;margin-bottom:22px;}
+.console-brand-mark{width:32px;height:32px;border-radius:8px;background:linear-gradient(135deg,#14b8a6,#f0b429);}
+.console-role-label{display:inline-flex;margin-bottom:14px;padding:6px 9px;border-radius:999px;background:rgba(20,184,166,.18);color:#bff7ed;font-size:12px;font-weight:800;}
+.console-sidebar nav{display:grid;gap:8px;}
+.console-sidebar a{display:flex;align-items:center;gap:8px;padding:10px 12px;border-radius:8px;color:#d9f8f3;border:1px solid transparent;}
+.console-sidebar a:hover{background:rgba(255,255,255,.08);border-color:rgba(255,255,255,.12);}
+.console-sidebar [data-permission="admin"]{box-shadow:inset 3px 0 0 rgba(240,180,41,.9);}
+.console-sidebar [data-permission="user"]{box-shadow:inset 3px 0 0 rgba(20,184,166,.9);}
+.unified-console-shell[data-console-role="admin"] [data-permission="user"]{display:none;}
+.unified-console-shell[data-console-role="user"] [data-permission="admin"]{display:none;}
+.console-main{min-width:0;padding:0;}
+
 .node-lookup-shell {
     width: min(1120px, calc(100vw - 32px));
     margin: 0 auto;
@@ -227,4 +241,11 @@ button.secondary {
     .node-lookup-hero h1 {
         font-size: 28px;
     }
+}
+
+@media (max-width:900px){
+    .unified-console-shell{grid-template-columns:1fr;}
+    .console-sidebar{position:relative;height:auto;}
+    .console-sidebar nav{grid-template-columns:repeat(auto-fit,minmax(150px,1fr));}
+    .console-main{padding:0;}
 }

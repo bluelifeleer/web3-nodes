@@ -209,3 +209,68 @@ CREATE TABLE IF NOT EXISTS `withdrawal_request` (
   KEY `idx_withdrawal_user` (`user_id`),
   KEY `idx_withdrawal_status` (`status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS `pcdn_task` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `task_name` varchar(128) DEFAULT '',
+  `provider` varchar(64) DEFAULT 'mock',
+  `vendor_task_id` varchar(128) DEFAULT '',
+  `resource_url` varchar(512) DEFAULT '',
+  `domain` varchar(255) DEFAULT '',
+  `status` varchar(32) DEFAULT 'created',
+  `created_by` varchar(128) DEFAULT '',
+  `created_at` datetime DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_pcdn_task_provider` (`provider`),
+  KEY `idx_pcdn_task_vendor` (`vendor_task_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS `pcdn_node_metric` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `provider` varchar(64) DEFAULT 'mock',
+  `vendor_task_id` varchar(128) DEFAULT '',
+  `node_address` varchar(128) DEFAULT '',
+  `resource_url` varchar(512) DEFAULT '',
+  `domain` varchar(255) DEFAULT '',
+  `bandwidth_mbps` float DEFAULT 0,
+  `traffic_gb` float DEFAULT 0,
+  `online_minutes` float DEFAULT 0,
+  `cache_hit_rate` float DEFAULT 0,
+  `started_at` datetime DEFAULT NULL,
+  `ended_at` datetime DEFAULT NULL,
+  `raw_payload_json` text,
+  `created_at` datetime DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_pcdn_metric_node` (`node_address`),
+  KEY `idx_pcdn_metric_task` (`vendor_task_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS `pcdn_settlement` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `provider` varchar(64) DEFAULT 'mock',
+  `vendor_task_id` varchar(128) DEFAULT '',
+  `node_address` varchar(128) DEFAULT '',
+  `metric_window` varchar(64) DEFAULT '',
+  `contribution_score` float DEFAULT 0,
+  `amount` float DEFAULT 0,
+  `status` varchar(32) DEFAULT 'pending',
+  `created_at` datetime DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_pcdn_settlement_node` (`node_address`),
+  KEY `idx_pcdn_settlement_task` (`vendor_task_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS `pcdn_provider_sync_log` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `provider` varchar(64) DEFAULT 'mock',
+  `sync_type` varchar(64) DEFAULT '',
+  `status` varchar(32) DEFAULT '',
+  `message` varchar(512) DEFAULT '',
+  `request_id` varchar(128) DEFAULT '',
+  `raw_summary_json` text,
+  `created_at` datetime DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_pcdn_sync_provider` (`provider`),
+  KEY `idx_pcdn_sync_status` (`status`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

@@ -13,7 +13,7 @@
     {% endif %}
 </head>
 <body class="commercial-page admin-dashboard-page">
-    <div class="unified-console-shell" data-console-role="admin">
+    <div class="unified-console-shell" data-console-role="admin" data-business-mode="{{ business_mode }}">
 
         <aside class="console-sidebar">
             <div class="console-brand"><span class="console-brand-mark"></span><span>Web3 Nodes 管理台</span></div>
@@ -23,11 +23,12 @@
                 <a data-permission="user" href="/user/upload">上传文件</a>
                 <a data-permission="user" href="/user/dashboard#sharesBox">我的分享</a>
                 <a data-permission="user" href="/user/dashboard#withdrawalsBox">收益提现</a>
-                <a data-permission="user" href="/node/lookup">节点标识查询</a>
                 <a data-permission="admin" href="/admin">管理员</a>
                 <a data-permission="admin" href="/admin#nodeTable">节点管理</a>
-                <a data-permission="admin" href="/admin#storageAuditTable">审计日志</a>
-                <a data-permission="admin" href="/admin#fileTable">文件存证</a>
+                <a data-permission="admin" class="business-pcdn-partner" href="/admin#pcdnDashboardSection">PCDN 任务</a>
+                <a data-permission="admin" href="/node/lookup">节点标识查询</a>
+                <a data-permission="admin" class="business-storage-share" href="/admin#storageAuditTable">审计日志</a>
+                <a data-permission="admin" class="business-storage-share" href="/admin#fileTable">文件存证</a>
             </nav>
         </aside>
 
@@ -54,11 +55,34 @@
         <span id="adminAutoRefreshStatus" class="token-status"></span>
     </div>
 
-    <div class="box commercial-card">
+    <div class="box commercial-card business-storage-share">
         <h3>分成比例配置</h3>
         <input type="text" id="selfRatio" placeholder="上级分成比例" value="0.15">
         <input type="text" id="nodeRatio" placeholder="节点分成比例" value="0.85">
         <button onclick="setRatio()">保存配置</button>
+    </div>
+
+    <div class="box commercial-card business-pcdn-partner" id="pcdnDashboardSection">
+        <h3>PCDN 业务看板</h3>
+        <div class="admin-status-bar">
+            <strong>当前模式</strong>
+            <span id="pcdnModeText">{{ business_mode }} / {{ pcdn_provider }}</span>
+            <button onclick="syncPcdnUsage()">同步模拟厂商数据</button>
+            <button onclick="runPcdnSettlement()">运行结算</button>
+        </div>
+        <div class="admin-node-grid">
+            <table>
+                <thead><tr><th>任务</th><th>资源</th><th>厂商任务</th><th>状态</th><th>Provider</th></tr></thead>
+                <tbody id="pcdnTaskTable"></tbody>
+            </table>
+        </div>
+        <div class="admin-node-grid pcdn-metric-grid">
+            <table>
+                <thead><tr><th>节点</th><th>流量GB</th><th>带宽Mbps</th><th>在线分钟</th><th>命中率</th></tr></thead>
+                <tbody id="pcdnMetricTable"></tbody>
+            </table>
+        </div>
+        <pre id="pcdnSyncLog"></pre>
     </div>
 
     <div class="box commercial-card">
@@ -87,14 +111,14 @@
         </div>
     </div>
 
-    <div class="box commercial-card" style="min-height:600px;">
+    <div class="box commercial-card business-storage-share" style="min-height:600px;">
         <h3>🌍 全网节点全球地理分布地图</h3>
         <p style="color:#64748b;font-size:14px;margin-bottom:15px;">实时在线节点打点｜离线节点灰色显示｜未配置 AMAP_WEB_KEY 或 AMAP_SECURITY_JSCODE 时自动切换为节点分布看板</p>
         <div id="map" style="width:100%;height:500px;border-radius:8px;"></div>
         <div id="nodeDistributionFallback" class="commercial-card" style="display:none;margin-top:12px;padding:14px;background:#f8fafc;"></div>
     </div>
 
-    <div class="box commercial-card">
+    <div class="box commercial-card business-storage-share">
         <h3>收益结算记录</h3>
         <button onclick="getReward()">刷新收益数据</button>
         <table>
@@ -113,7 +137,7 @@
         </table>
     </div>
 
-    <div class="box commercial-card">
+    <div class="box commercial-card business-storage-share">
         <h3>提现申请</h3>
         <button onclick="getAdminWithdrawals()">刷新提现</button>
         <table>
@@ -122,7 +146,7 @@
         </table>
     </div>
 
-    <div class="box commercial-card">
+    <div class="box commercial-card business-storage-share">
         <h3>存储审计日志</h3>
         <input id="auditFileHashFilter" placeholder="file_hash" style="min-width:220px">
         <input id="auditNodeFilter" placeholder="node_address">
@@ -138,7 +162,7 @@
         <pre id="storageAuditDetail" style="white-space:pre-wrap;background:#f8fafc;padding:12px;border-radius:6px;margin-top:10px;"></pre>
     </div>
 
-    <div class="box commercial-card">
+    <div class="box commercial-card business-storage-share">
     <h3>📁 文件加密上链存证记录（分布式存储）</h3>
     <input id="fileSearch" placeholder="搜索文件名 / 哈希 / CID" style="min-width:260px">
     <button onclick="getFileList()">刷新存证数据</button>
@@ -163,7 +187,7 @@
     </table>
     </div>
 
-    <div class="box commercial-card">
+    <div class="box commercial-card business-storage-share">
         <h3>节点排行榜</h3>
         <button onclick="getLeaderboard()">刷新排行榜</button>
         <table>
@@ -211,7 +235,9 @@
     </div>
 <script>
     window.ADMIN_DASHBOARD_CONFIG = {
-        amapWebKey: {{ (amap_web_key or "")|tojson }}
+        amapWebKey: {{ (amap_web_key or "")|tojson }},
+        businessMode: {{ business_mode|tojson }},
+        pcdnProvider: {{ pcdn_provider|tojson }}
     };
 </script>
 <script src="/static/js/admin-dashboard.js"></script>

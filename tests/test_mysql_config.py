@@ -4,6 +4,7 @@ import http.client
 import io
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import types
@@ -36,8 +37,11 @@ ENV_KEYS = (
     "WEB3_NODES_SKIP_DOTENV",
     "AMAP_WEB_KEY",
     "AMAP_SECURITY_JSCODE",
+    "BUSINESS_MODE",
+    "PCDN_PROVIDER",
     "NODE_OPEN_MAP_WINDOW",
     "NODE_OPEN_CLIENT_CONSOLE",
+    "NODE_BUSINESS_MODE",
 )
 
 
@@ -161,6 +165,18 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertEqual(points.share_download_points(), 1)
         self.assertEqual(points.node_download_points(10), 1.0)
         self.assertEqual(points.points_to_earning_units(250), 2.5)
+
+    def test_business_mode_helpers_normalize_modes_and_provider(self):
+        business = importlib.import_module("app.services.business")
+
+        self.assertEqual(business.normalize_business_mode("pcdn_partner"), "pcdn_partner")
+        self.assertEqual(business.normalize_business_mode(" PCDN "), "pcdn_partner")
+        self.assertEqual(business.normalize_business_mode("storage_share"), "storage_share")
+        self.assertEqual(business.normalize_business_mode("unknown"), "storage_share")
+        self.assertTrue(business.business_mode_is_pcdn("pcdn_partner"))
+        self.assertFalse(business.business_mode_is_pcdn("storage_share"))
+        self.assertEqual(business.normalize_pcdn_provider(""), "mock")
+        self.assertEqual(business.normalize_pcdn_provider(" Vendor-A "), "vendor-a")
 
     def test_withdrawal_amount_validation(self):
         withdrawals = importlib.import_module("app.services.withdrawals")
@@ -912,6 +928,26 @@ class MysqlConfigTest(unittest.TestCase):
         finally:
             env_path.unlink(missing_ok=True)
 
+    def test_server_safe_print_handles_gbk_console_without_crashing(self):
+        server_main = load_server_main()
+        printed = []
+
+        def gbk_print(message):
+            message.encode("gbk")
+            printed.append(message)
+
+        server_main.safe_print("✅ 完整服务启动成功！首页地址：http://127.0.0.1:8000", print_func=gbk_print)
+
+        self.assertEqual(len(printed), 1)
+        self.assertIn("完整服务启动成功", printed[0])
+        self.assertNotIn("✅", printed[0])
+
+    def test_server_config_reads_business_mode_and_pcdn_provider(self):
+        server_main = load_server_main(BUSINESS_MODE="pcdn_partner", PCDN_PROVIDER="mock")
+
+        self.assertEqual(server_main.SERVER_CONFIG.business_mode, "pcdn_partner")
+        self.assertEqual(server_main.SERVER_CONFIG.pcdn_provider, "mock")
+
     def test_init_mysql_sql_contains_database_and_required_tables(self):
         sql = Path("app/schema/init_mysql.sql").read_text(encoding="utf-8")
 
@@ -1080,6 +1116,149 @@ class MysqlConfigTest(unittest.TestCase):
             self.assertIn("storage_audit_log", text)
             self.assertIn("storage_quota_gb", text)
             self.assertIn("storage_available_gb", text)
+
+    def test_pcdn_schema_tables_are_declared(self):
+        mysql_sql = Path("app/schema/init_mysql.sql").read_text(encoding="utf-8")
+        postgres_sql = Path("app/schema/init_postgresql.sql").read_text(encoding="utf-8")
+        mysql_server = load_server_main(DB_ENGINE="mysql")
+        postgres_server = load_server_main(DB_ENGINE="postgresql")
+        mysql_migrations = "\n".join(mysql_server.database_module.SCHEMA_MIGRATIONS)
+        postgres_migrations = "\n".join(postgres_server.database_module.POSTGRES_SCHEMA_MIGRATIONS)
+
+        for sql in (mysql_sql, postgres_sql, mysql_migrations, postgres_migrations):
+            for table in (
+                "pcdn_task",
+                "pcdn_node_metric",
+                "pcdn_settlement",
+                "pcdn_provider_sync_log",
+            ):
+                self.assertIn(table, sql)
+            for field in (
+                "provider",
+                "vendor_task_id",
+                "traffic_gb",
+                "bandwidth_mbps",
+                "cache_hit_rate",
+                "raw_payload_json",
+            ):
+                self.assertIn(field, sql)
+
+    def test_mock_pcdn_adapter_returns_deterministic_contract_data(self):
+        registry = importlib.import_module("app.services.pcdn.adapters.registry")
+
+        adapter = registry.get_pcdn_adapter("mock")
+        health = adapter.health()
+        resources = adapter.list_resources()
+        task = adapter.create_task({"task_name": "demo", "resource_url": "https://example.com/video.mp4"})
+        metrics = adapter.sync_usage()
+
+        self.assertEqual(adapter.provider_name, "mock")
+        self.assertTrue(health["online"])
+        self.assertEqual(resources[0]["provider"], "mock")
+        self.assertEqual(task["vendor_task_id"], "mock-task-demo")
+        self.assertEqual(metrics[0]["provider"], "mock")
+        self.assertIn("traffic_gb", metrics[0])
+        self.assertIn("bandwidth_mbps", metrics[0])
+        self.assertIn("cache_hit_rate", metrics[0])
+
+    def test_pcdn_settlement_calculates_repeatable_rewards(self):
+        service = importlib.import_module("app.services.pcdn.service")
+        metrics = [{
+            "provider": "mock",
+            "vendor_task_id": "mock-task-demo",
+            "node_address": "NODE_A",
+            "traffic_gb": 10,
+            "bandwidth_mbps": 5,
+            "online_minutes": 20,
+            "cache_hit_rate": 0.8,
+            "started_at": "2026-06-30 10:00:00",
+            "ended_at": "2026-06-30 11:00:00",
+        }]
+
+        settlements = service.build_settlements_from_metrics(metrics)
+
+        self.assertEqual(settlements[0]["node_address"], "NODE_A")
+        self.assertEqual(settlements[0]["contribution_score"], 20.0)
+        self.assertEqual(settlements[0]["amount"], 0.2)
+        self.assertEqual(settlements[0]["status"], "settled")
+
+    def test_pcdn_routes_return_mock_business_data_in_pcdn_mode(self):
+        server_main = load_server_main(
+            ADMIN_API_TOKEN="secret-token",
+            BUSINESS_MODE="pcdn_partner",
+            PCDN_PROVIDER="mock",
+        )
+        server_main.init_db = lambda: True
+        client = server_main.app.test_client()
+        headers = {"X-Admin-Token": "secret-token"}
+
+        status = client.get("/api/pcdn/status", headers=headers)
+        tasks = client.get("/api/pcdn/tasks", headers=headers)
+        created = client.post(
+            "/api/pcdn/tasks",
+            headers=headers,
+            json={"task_name": "demo", "resource_url": "https://example.com/video.mp4"},
+        )
+        sync = client.post("/api/pcdn/sync", headers=headers, json={})
+        settlements = client.post("/api/pcdn/settlements/run", headers=headers, json={})
+
+        self.assertEqual(status.status_code, 200)
+        self.assertEqual(tasks.status_code, 200)
+        self.assertEqual(created.status_code, 200)
+        self.assertEqual(sync.status_code, 200)
+        self.assertEqual(settlements.status_code, 200)
+        self.assertEqual(status.get_json()["data"]["business_mode"], "pcdn_partner")
+        self.assertEqual(created.get_json()["data"]["vendor_task_id"], "mock-task-demo")
+        self.assertEqual(sync.get_json()["data"]["metrics"][0]["provider"], "mock")
+        self.assertEqual(settlements.get_json()["data"]["settlements"][0]["status"], "settled")
+
+    def test_pcdn_routes_require_admin_token(self):
+        server_main = load_server_main(
+            ADMIN_API_TOKEN="secret-token",
+            BUSINESS_MODE="pcdn_partner",
+            PCDN_PROVIDER="mock",
+        )
+        server_main.init_db = lambda: True
+
+        response = server_main.app.test_client().get("/api/pcdn/status")
+
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.get_json()["code"], 401)
+
+    def test_admin_dashboard_shows_pcdn_sections_in_pcdn_mode(self):
+        server_main = load_server_main(
+            ADMIN_API_TOKEN="secret-token",
+            BUSINESS_MODE="pcdn_partner",
+            PCDN_PROVIDER="mock",
+        )
+        server_main.init_db = lambda: True
+
+        response = server_main.app.test_client().get("/admin")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        admin_source = (
+            body
+            + read_static_asset_or_empty("app/static/js/admin-dashboard.js")
+            + read_static_asset_or_empty("app/static/css/admin-dashboard.css")
+        )
+        self.assertIn('data-business-mode="pcdn_partner"', body)
+        self.assertIn('id="pcdnDashboardSection"', body)
+        self.assertIn('id="pcdnTaskTable"', body)
+        self.assertIn("/api/pcdn/status", admin_source)
+        self.assertIn("/api/pcdn/tasks", admin_source)
+        self.assertIn("/api/pcdn/sync", admin_source)
+        self.assertIn(".business-storage-share", admin_source)
+        self.assertIn(".business-pcdn-partner", admin_source)
+
+    def test_readme_documents_pcdn_business_mode_switching(self):
+        readme = Path("README.md").read_text(encoding="utf-8")
+
+        self.assertIn("BUSINESS_MODE", readme)
+        self.assertIn("storage_share", readme)
+        self.assertIn("pcdn_partner", readme)
+        self.assertIn("PCDN_PROVIDER", readme)
+        self.assertIn("mock", readme)
 
     def test_insert_storage_audit_log_writes_expected_fields(self):
         server_main = load_server_main()
@@ -1354,6 +1533,7 @@ class MysqlConfigTest(unittest.TestCase):
         file_routes = importlib.import_module("app.routes.files")
         finance_routes = importlib.import_module("app.routes.finance")
         node_routes = importlib.import_module("app.routes.nodes")
+        pcdn_routes = importlib.import_module("app.routes.pcdn")
         auth_service = importlib.import_module("app.services.auth")
         files_service = importlib.import_module("app.services.files")
         points_service = importlib.import_module("app.services.points")
@@ -1466,6 +1646,15 @@ class MysqlConfigTest(unittest.TestCase):
             "files_api.public_share_download",
         ):
             self.assertEqual(server_main.app.view_functions[endpoint].__module__, file_routes.__name__)
+        for endpoint in (
+            "pcdn_api.pcdn_status",
+            "pcdn_api.pcdn_tasks",
+            "pcdn_api.pcdn_task_create",
+            "pcdn_api.pcdn_sync",
+            "pcdn_api.pcdn_node_metrics",
+            "pcdn_api.pcdn_settlements",
+        ):
+            self.assertEqual(server_main.app.view_functions[endpoint].__module__, pcdn_routes.__name__)
         self.assertIs(server_main.ensure_runtime_secrets, server_runtime.ensure_runtime_secrets)
         self.assertIs(server_main.parse_env_file_values, server_runtime.parse_env_file_values)
         self.assertIs(server_main.HOME_HTML, server_pages.HOME_HTML)
@@ -1517,6 +1706,13 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertIn("/admin/login", body)
         self.assertIn("admin-node-grid", body)
         self.assertIn("node-storage-usage", body + admin_assets)
+        self.assertIn(".unified-console-shell{display:grid", admin_assets)
+        self.assertIn("grid-template-columns:248px minmax(0,1fr)", admin_assets)
+        self.assertIn(".console-sidebar{position:sticky", admin_assets)
+        self.assertIn(".console-main{min-width:0", admin_assets)
+        self.assertIn("@media (max-width:900px)", admin_assets)
+        self.assertIn('.unified-console-shell[data-console-role="admin"] [data-permission="user"]{display:none;}', admin_assets)
+        self.assertIn('.unified-console-shell[data-console-role="user"] [data-permission="admin"]{display:none;}', admin_assets)
         self.assertIn('href="/static/css/admin-dashboard.css"', body)
         self.assertIn('src="/static/js/admin-dashboard.js"', body)
         self.assertEqual(server_main.ADMIN_DASHBOARD_TEMPLATE, "admin_dashboard.html")
@@ -1535,6 +1731,7 @@ class MysqlConfigTest(unittest.TestCase):
             "用户工作台",
         ):
             self.assertIn(marker, body)
+        self.assertIn('<a data-permission="admin" href="/node/lookup">节点标识查询</a>', body)
 
     def test_unified_console_routes_render_role_based_management_shells(self):
         server_main = load_server_main(ADMIN_API_TOKEN="secret-token", SESSION_SECRET="session-secret")
@@ -1575,6 +1772,15 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertTrue(Path("app/static/css/console.css").exists())
         self.assertTrue(Path("app/static/js/console.js").exists())
         self.assertIn("unified-console-shell", Path("app/static/css/console.css").read_text(encoding="utf-8"))
+        self.assertIn(
+            '.unified-console-shell[data-console-role="admin"] [data-permission="user"]{display:none;}',
+            Path("app/static/css/console.css").read_text(encoding="utf-8"),
+        )
+        self.assertIn(
+            '.unified-console-shell[data-console-role="user"] [data-permission="admin"]{display:none;}',
+            Path("app/static/css/console.css").read_text(encoding="utf-8"),
+        )
+        self.assertIn('<a data-permission="admin" href="/node/lookup">节点标识查询</a>', body)
         self.assertIn("loadUserWorkspace", Path("app/static/js/console.js").read_text(encoding="utf-8"))
         static_response = client.get("/static/css/console.css")
         try:
@@ -2184,6 +2390,49 @@ class MysqlConfigTest(unittest.TestCase):
             else:
                 sys.modules["webview"] = old_webview
 
+    def test_client_config_and_status_include_business_mode(self):
+        old_requests = sys.modules.get("requests")
+        old_webview = sys.modules.get("webview")
+        old_env = os.environ.get("NODE_BUSINESS_MODE")
+        try:
+            os.environ["NODE_BUSINESS_MODE"] = "pcdn_partner"
+            sys.modules["requests"] = types.SimpleNamespace(post=lambda *args, **kwargs: None, get=lambda *args, **kwargs: None)
+            sys.modules["webview"] = None
+            sys.modules.pop("client", None)
+            sys.modules.pop("client.config", None)
+            sys.modules.pop("client.main", None)
+            client_module = importlib.import_module("client")
+
+            config = client_module.load_client_config("tests/missing-node-config.json")
+            state = client_module.create_client_state(
+                "http://127.0.0.1:8000",
+                "NODE_A",
+                "MAC_A",
+                "",
+                8787,
+                business_mode=config["business_mode"],
+            )
+
+            self.assertEqual(config["business_mode"], "pcdn_partner")
+            self.assertEqual(state["business_mode"], "pcdn_partner")
+            self.assertEqual(client_module.client_status_payload(state)["business_mode"], "pcdn_partner")
+        finally:
+            if old_env is None:
+                os.environ.pop("NODE_BUSINESS_MODE", None)
+            else:
+                os.environ["NODE_BUSINESS_MODE"] = old_env
+            sys.modules.pop("client", None)
+            sys.modules.pop("client.config", None)
+            sys.modules.pop("client.main", None)
+            if old_requests is None:
+                sys.modules.pop("requests", None)
+            else:
+                sys.modules["requests"] = old_requests
+            if old_webview is None:
+                sys.modules.pop("webview", None)
+            else:
+                sys.modules["webview"] = old_webview
+
     def test_client_console_html_contains_node_operations(self):
         old_requests = sys.modules.get("requests")
         old_webview = sys.modules.get("webview")
@@ -2198,6 +2447,11 @@ class MysqlConfigTest(unittest.TestCase):
                 "总容量",
                 "提交提现",
                 "添加目录",
+                "node-console-sidebar",
+                "side-nav-title",
+                "相关目录",
+                'href="#storageSection"',
+                'href="#localShardSection"',
                 "停止节点",
                 "重启节点",
                 "本机已存文件",
@@ -2207,6 +2461,13 @@ class MysqlConfigTest(unittest.TestCase):
                 "node-kpi-board",
                 "localShardUsage",
                 "formatStorageDisplay",
+            ):
+                self.assertIn(marker, html)
+            for marker in (
+                "data-business-mode",
+                "PCDN 缓存目录",
+                "Cache directory",
+                "applyBusinessModeLabels",
             ):
                 self.assertIn(marker, html)
         finally:
@@ -2969,6 +3230,22 @@ class MysqlConfigTest(unittest.TestCase):
             else:
                 sys.modules["webview"] = old_webview
 
+    def test_client_main_imports_when_executed_from_client_directory(self):
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-B",
+                "-c",
+                "import runpy; runpy.run_path('main.py', run_name='client_main_import_check')",
+            ],
+            cwd=str(Path("client")),
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_client_storage_route_update_feeds_next_heartbeat_payload(self):
         old_requests = sys.modules.get("requests")
         old_webview = sys.modules.get("webview")
@@ -3395,6 +3672,13 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertIn("/api/control/uninstall", html)
         self.assertIn("/api/node/identity", html)
         self.assertIn("可提现或处理中收益", html)
+        self.assertIn('id="uninstallModal"', html)
+        self.assertIn('id="uninstallConfirmButton"', html)
+        self.assertIn('id="uninstallCancelButton"', html)
+        self.assertIn("openUninstallModal", html)
+        self.assertIn("closeUninstallModal", html)
+        self.assertIn("confirmUninstallNode", html)
+        self.assertNotIn('confirm("确认卸载节点服务？', html)
 
     def test_client_identity_export_endpoint_downloads_saved_node_info(self):
         old_requests = sys.modules.get("requests")
@@ -4620,8 +4904,16 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertIn('id="identityText"', body)
         self.assertIn('id="identityFile"', body)
         self.assertIn("/api/node/identity/lookup", body)
+        self.assertIn('class="unified-console-shell"', body)
+        self.assertIn('data-console-role="admin"', body)
+        self.assertIn("console-sidebar", body)
+        self.assertIn('<a data-permission="admin" href="/node/lookup">节点标识查询</a>', body)
+        self.assertNotIn('<a data-permission="user" href="/node/lookup">节点标识查询</a>', body)
         self.assertIn('href="/static/css/node-lookup.css"', body)
         self.assertIn('src="/static/js/node-lookup.js"', body)
+        node_lookup_css = read_static_asset_or_empty("app/static/css/node-lookup.css")
+        self.assertIn('.unified-console-shell[data-console-role="admin"] [data-permission="user"]{display:none;}', node_lookup_css)
+        self.assertIn('.unified-console-shell[data-console-role="user"] [data-permission="admin"]{display:none;}', node_lookup_css)
 
     def test_admin_withdrawals_requires_admin_token(self):
         server_main = load_server_main(ADMIN_API_TOKEN="secret-token")
@@ -4718,6 +5010,12 @@ class MysqlConfigTest(unittest.TestCase):
         upload_source = body + read_static_asset_or_empty("app/static/js/user-upload.js")
         self.assertIn('href="/static/css/user-upload.css"', body)
         self.assertIn('src="/static/js/user-upload.js"', body)
+        self.assertIn('class="unified-console-shell"', body)
+        self.assertIn('data-console-role="user"', body)
+        self.assertIn("console-sidebar", body)
+        self.assertIn('<a data-permission="user" href="/user/upload">上传文件</a>', body)
+        self.assertIn('<a data-permission="admin" href="/node/lookup">节点标识查询</a>', body)
+        self.assertNotIn('<a data-permission="user" href="/node/lookup">节点标识查询</a>', body)
         self.assertIn("/api/user/files", upload_source)
         self.assertIn('/api/user/files/${encodeURIComponent(fileHash)}/shares', upload_source)
         self.assertIn("/s/", upload_source)
@@ -4735,6 +5033,9 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertTrue(Path("app/templates/user_upload.html").exists())
         self.assertTrue(Path("app/static/css/user-upload.css").exists())
         self.assertTrue(Path("app/static/js/user-upload.js").exists())
+        user_upload_css = read_static_asset_or_empty("app/static/css/user-upload.css")
+        self.assertIn('.unified-console-shell[data-console-role="admin"] [data-permission="user"]{display:none;}', user_upload_css)
+        self.assertIn('.unified-console-shell[data-console-role="user"] [data-permission="admin"]{display:none;}', user_upload_css)
         self.assertIn("generateDefaultExtractCode", Path("app/static/js/user-upload.js").read_text(encoding="utf-8"))
 
     def test_user_login_page_renders_forms_and_token_storage(self):
@@ -4754,6 +5055,7 @@ class MysqlConfigTest(unittest.TestCase):
             'id="loginPanel"',
             'id="registerPanel"',
             'id="walletPanel"',
+            'id="connectWalletLoginButton"',
             'id="otherLoginButton"',
             'id="otherLoginModal"',
             'data-other-login="phone"',
@@ -4776,6 +5078,10 @@ class MysqlConfigTest(unittest.TestCase):
             "switchAuthTab",
             "openOtherLoginModal",
             "redirectAfterLogin",
+            "getEthereumProvider",
+            "connectWalletAccount",
+            "signWalletMessage",
+            "loginWithBrowserWallet",
             "URLSearchParams",
         ):
             self.assertIn(marker, login_source)
@@ -4793,6 +5099,8 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertIn("/api/auth/register", login_source)
         self.assertIn("/api/auth/login", login_source)
         self.assertIn("/api/wallet/login", login_source)
+        self.assertIn("eth_requestAccounts", login_source)
+        self.assertIn("personal_sign", login_source)
         self.assertIn("saveSession(payload, true)", login_source)
         self.assertIn('localStorage.setItem("user_token"', login_source)
         self.assertEqual(server_main.USER_LOGIN_TEMPLATE, "user_login.html")
@@ -4818,6 +5126,8 @@ class MysqlConfigTest(unittest.TestCase):
             "/api/user/points",
             "/api/user/earnings",
             "/api/user/withdrawals",
+            "/api/wallet/nonce",
+            "/api/wallet/bind",
         ):
             self.assertIn(api_path, dashboard_source)
         self.assertIn('href="/static/css/user-dashboard.css"', body)
@@ -4825,6 +5135,10 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertIn("user_token", dashboard_source)
         self.assertIn("createShareForFile", dashboard_source)
         self.assertIn("defaultExtractCodeForFile", dashboard_source)
+        self.assertIn("connectWalletAccount", dashboard_source)
+        self.assertIn("bindWithBrowserWallet", dashboard_source)
+        self.assertIn("eth_requestAccounts", dashboard_source)
+        self.assertIn("personal_sign", dashboard_source)
         self.assertNotIn("prompt(", dashboard_source)
         for marker in (
             'id="shareCreateModal"',
@@ -4832,6 +5146,7 @@ class MysqlConfigTest(unittest.TestCase):
             'id="shareExtractCodeInput"',
             'id="shareResultBox"',
             'id="shareCreateButton"',
+            'id="connectBindWalletButton"',
         ):
             self.assertIn(marker, body)
         for marker in ("openShareDialog", "closeShareDialog"):

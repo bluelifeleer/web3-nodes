@@ -56,6 +56,44 @@ const statusBox = document.getElementById("statusBox");
         if(!response.ok){ throw new Error(payload.msg || response.statusText); }
         return payload;
     }
+    function getEthereumProvider(){
+        const provider = window.ethereum;
+        if(!provider || typeof provider.request !== "function"){
+            throw new Error("未检测到浏览器钱包，请安装或启用 MetaMask、OKX Wallet 等钱包插件。");
+        }
+        return provider;
+    }
+    async function connectWalletAccount(){
+        const provider = getEthereumProvider();
+        const accounts = await provider.request({method: "eth_requestAccounts"});
+        const walletAddress = String((accounts || [])[0] || "").trim().toLowerCase();
+        if(!walletAddress){ throw new Error("钱包没有返回可用地址"); }
+        return walletAddress;
+    }
+    async function signWalletMessage(message, walletAddress){
+        if(!message){ throw new Error("服务端未返回待签名消息"); }
+        const provider = getEthereumProvider();
+        return provider.request({method: "personal_sign", params: [message, walletAddress]});
+    }
+    async function loginWithBrowserWallet(){
+        const walletAddress = await connectWalletAccount();
+        document.getElementById("walletAddress").value = walletAddress;
+        document.getElementById("walletProviderStatus").textContent = `已连接钱包：${walletAddress}`;
+        const noncePayload = await postJson("/api/wallet/nonce", {
+            wallet_address: walletAddress,
+            purpose: "login"
+        });
+        document.getElementById("walletNonce").value = noncePayload.nonce || "";
+        document.getElementById("walletMessage").textContent = noncePayload.message || "";
+        const signature = await signWalletMessage(noncePayload.message, walletAddress);
+        document.getElementById("walletSignature").value = signature || "";
+        const payload = await postJson("/api/wallet/login", {
+            wallet_address: walletAddress,
+            nonce: noncePayload.nonce || "",
+            signature: signature || ""
+        });
+        saveSession(payload, true);
+    }
     document.getElementById("registerForm").addEventListener("submit", async (event) => {
         event.preventDefault();
         try{
@@ -100,6 +138,12 @@ const statusBox = document.getElementById("statusBox");
             document.getElementById("walletMessage").textContent = payload.message || "";
             showStatus("nonce 已生成，请在钱包中签名后填入签名。");
         }catch(error){ showStatus(`nonce 获取失败\n${error.message}`); }
+    });
+    document.getElementById("connectWalletLoginButton").addEventListener("click", async () => {
+        try{
+            showStatus("正在连接钱包...");
+            await loginWithBrowserWallet();
+        }catch(error){ showStatus(`钱包连接登录失败\n${error.message}`); }
     });
     document.getElementById("walletLoginForm").addEventListener("submit", async (event) => {
         event.preventDefault();

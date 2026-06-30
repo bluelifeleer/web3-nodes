@@ -17,9 +17,9 @@
                 <a data-permission="user" href="/user/upload">上传文件</a>
                 <a data-permission="user" href="/user/dashboard#sharesBox">我的分享</a>
                 <a data-permission="user" href="/user/dashboard#withdrawalsBox">收益提现</a>
-                <a data-permission="user" href="/node/lookup">节点标识查询</a>
                 <a data-permission="admin" href="/admin">管理员</a>
                 <a data-permission="admin" href="/admin#nodeTable">节点管理</a>
+                <a data-permission="admin" href="/node/lookup">节点标识查询</a>
                 <a data-permission="admin" href="/admin#storageAuditTable">审计日志</a>
                 <a data-permission="admin" href="/admin#fileTable">文件存证</a>
             </nav>
@@ -66,6 +66,7 @@
         <h2>钱包绑定</h2>
         <div class="grid">
             <input id="bindWalletAddress" placeholder="钱包地址 0x...">
+            <button id="connectBindWalletButton">连接钱包并绑定</button>
             <button id="bindNonceButton">获取绑定 nonce</button>
             <input id="bindNonce" placeholder="nonce">
             <input id="bindSignature" placeholder="签名">

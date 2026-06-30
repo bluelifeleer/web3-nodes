@@ -116,6 +116,14 @@ from app.services.storage import (
     validate_file_hash,
 )
 
+
+def safe_print(message, print_func=print):
+    try:
+        print_func(message)
+    except UnicodeEncodeError:
+        print_func(str(message).encode("gbk", errors="ignore").decode("gbk"))
+
+
 # ==================== 初始化Flask服务 ====================
 app = Flask(
     __name__,
@@ -1883,6 +1891,6 @@ if __name__ == "__main__":
     # 开启定时结算
     import threading
     threading.Thread(target=settle_task,daemon=True).start()
-    print("✅ 完整服务启动成功！首页地址：http://127.0.0.1:8000")
-    print("✅ 后台地址：http://127.0.0.1:8000/admin")
+    safe_print("✅ 完整服务启动成功！首页地址：http://127.0.0.1:8000")
+    safe_print("✅ 后台地址：http://127.0.0.1:8000/admin")
     app.run(host="0.0.0.0",port=8000,debug=False)

@@ -7,6 +7,23 @@
     <link rel="stylesheet" href="/static/css/user-upload.css">
 </head>
 <body class="commercial-page user-upload-page">
+    <div class="unified-console-shell" data-console-role="user">
+        <aside class="console-sidebar">
+            <div class="console-brand"><span class="console-brand-mark"></span><span>Web3 Nodes 管理台</span></div>
+            <span class="console-role-label">统一权限入口</span>
+            <nav>
+                <a data-permission="user" href="/user/dashboard">用户工作台</a>
+                <a data-permission="user" href="/user/upload">上传文件</a>
+                <a data-permission="user" href="/user/dashboard#sharesBox">我的分享</a>
+                <a data-permission="user" href="/user/dashboard#withdrawalsBox">收益提现</a>
+                <a data-permission="admin" href="/admin">管理员</a>
+                <a data-permission="admin" href="/admin#nodeTable">节点管理</a>
+                <a data-permission="admin" href="/node/lookup">节点标识查询</a>
+                <a data-permission="admin" href="/admin#storageAuditTable">审计日志</a>
+                <a data-permission="admin" href="/admin#fileTable">文件存证</a>
+            </nav>
+        </aside>
+    <main class="console-main">
     <div class="page-shell">
     <nav class="modern-nav">
         <div class="brand-lockup"><span class="brand-mark"></span><span>Web3 Nodes Store</span></div>
@@ -59,7 +76,8 @@
     </div>
     <pre id="resultBox" class="status">等待上传...</pre>
     </div>
+    </main>
+    </div>
     <script src="/static/js/user-upload.js"></script>
 </body>
 </html>
-
