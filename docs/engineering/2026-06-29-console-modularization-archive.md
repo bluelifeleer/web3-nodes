@@ -114,6 +114,22 @@
 - `app/routes/pages.py`
   - 负责首页、后台登录页、统一管理台、用户上传页、分享页、健康检查等页面/轻量 API 蓝图。
 
+- `app/routes/admin.py`
+  - 负责后台审计、审计导出、用户/分享/下载/积分管理列表 API 蓝图。
+
+- `app/routes/auth.py`
+  - 负责 `/api/auth/*` 与 `/api/wallet/*` 认证/钱包 API 蓝图，保留路径和响应契约不变。
+
+- `app/routes/finance.py`
+  - 负责用户收益、积分、提现，以及管理员提现列表/审核 API 蓝图。
+
+- `app/routes/files.py`
+  - 负责用户文件上传/列表/详情/删除、用户分享创建/列表/更新/删除，以及公开分享详情、提取码校验、下载 API 蓝图。
+  - 保持文件切片加密、hash 校验、真实节点写入、IPFS 兜底、下载验片解密合并与审计记录的既有响应契约不变。
+
+- `app/routes/nodes.py`
+  - 负责 `/register`、`/heartbeat`、`/api/node_*`、`/api/reward_*`、排行榜和邀请树等节点 API 蓝图。
+
 - `app/services/ipfs.py`
   - 负责 IPFS RPC 地址解析、HTTP API 兜底客户端、状态读取。
   - 兼容测试和旧入口对 `server_main.requests`、`server_main.ipfshttpclient` 的 monkeypatch。
@@ -129,7 +145,7 @@
 
 - 客户端启动入口改为 `python -m client.main`。
 - `auth.py`、`db.py`、`points.py`、`shares.py`、`files.py`、`withdrawals.py`、`client.py`、`client_config.py`、`client_console.py`、`node_mac.py` 不再保留根目录兼容壳。
-- `server_main.py` 仍是服务端启动入口，但页面类路由已由 `app.routes.pages` 蓝图注册。
+- `server_main.py` 仍是服务端启动入口，但页面类路由已由 `app.routes.pages` 蓝图注册，后台管理 API 已由 `app.routes.admin` 蓝图注册，认证/钱包 API 已由 `app.routes.auth` 蓝图注册，节点 API 已由 `app.routes.nodes` 蓝图注册，收益/提现 API 已由 `app.routes.finance` 蓝图注册，用户文件与分享 API 已由 `app.routes.files` 蓝图注册。
 
 ## 关键入口
 
@@ -162,15 +178,17 @@ http://127.0.0.1:8787
 
 ```powershell
 python -B -m unittest tests.test_mysql_config
+python -B -m unittest tests.test_mysql_config.MysqlConfigTest.test_user_files_requires_user_token tests.test_mysql_config.MysqlConfigTest.test_user_upload_page_posts_to_user_file_api_with_bearer_token tests.test_mysql_config.MysqlConfigTest.test_public_share_page_downloads_with_inline_extract_code tests.test_mysql_config.MysqlConfigTest.test_user_files_list_selects_only_current_owner tests.test_mysql_config.MysqlConfigTest.test_user_file_upload_duplicate_returns_409_before_ipfs tests.test_mysql_config.MysqlConfigTest.test_user_file_upload_db_failure_rolls_back tests.test_mysql_config.MysqlConfigTest.test_user_file_upload_uses_transaction_and_restores_autocommit tests.test_mysql_config.MysqlConfigTest.test_user_file_upload_uses_user_nodes_when_ipfs_backup_fails tests.test_mysql_config.MysqlConfigTest.test_user_file_upload_records_shard_metadata_and_audit tests.test_mysql_config.MysqlConfigTest.test_user_file_upload_still_attempts_ipfs_after_real_node_success tests.test_mysql_config.MysqlConfigTest.test_user_file_upload_requires_real_user_storage_nodes tests.test_mysql_config.MysqlConfigTest.test_user_file_upload_duplicate_insert_failure_returns_409 tests.test_mysql_config.MysqlConfigTest.test_user_file_detail_and_delete_reject_malformed_hash tests.test_mysql_config.MysqlConfigTest.test_create_share_requires_owned_file_and_hashes_extract_code tests.test_mysql_config.MysqlConfigTest.test_create_share_retries_duplicate_share_code_collision tests.test_mysql_config.MysqlConfigTest.test_user_shares_list_uses_current_owner_and_hides_extract_hash tests.test_mysql_config.MysqlConfigTest.test_update_and_delete_share_are_owner_only tests.test_mysql_config.MysqlConfigTest.test_update_share_returns_404_when_update_rowcount_is_zero tests.test_mysql_config.MysqlConfigTest.test_update_share_persists_offset_expiry_as_local_naive_datetime tests.test_mysql_config.MysqlConfigTest.test_public_share_missing_returns_json_404 tests.test_mysql_config.MysqlConfigTest.test_public_share_metadata_validates_access_and_hides_extract_hash tests.test_mysql_config.MysqlConfigTest.test_public_share_verify_checks_extract_code tests.test_mysql_config.MysqlConfigTest.test_share_download_logs_download_and_point_ledger_entries tests.test_mysql_config.MysqlConfigTest.test_share_download_prefers_user_node_storage_before_ipfs tests.test_mysql_config.MysqlConfigTest.test_download_reconstructs_verified_client_shards_before_decrypt tests.test_mysql_config.MysqlConfigTest.test_download_rejects_corrupt_client_shard_and_uses_fallback tests.test_mysql_config.MysqlConfigTest.test_download_final_file_hash_mismatch_returns_json_error tests.test_mysql_config.MysqlConfigTest.test_share_download_falls_back_to_ipfs_when_user_node_storage_missing tests.test_mysql_config.MysqlConfigTest.test_share_download_atomic_rowcount_zero_aborts_before_side_effects tests.test_mysql_config.MysqlConfigTest.test_share_download_ipfs_cat_failure_returns_json_without_side_effects tests.test_mysql_config.MysqlConfigTest.test_share_download_blocks_exhausted_share_before_side_effects tests.test_mysql_config.MysqlConfigTest.test_user_owned_public_file_download_requires_share_route
 python -B -m unittest tests.test_mysql_config.MysqlConfigTest.test_server_main_delegates_runtime_pages_ipfs_and_node_helpers_to_flask_app_modules tests.test_mysql_config.MysqlConfigTest.test_public_homepage_links_business_user_admin_and_node_flows tests.test_mysql_config.MysqlConfigTest.test_admin_dashboard_is_available_at_admin_without_database tests.test_mysql_config.MysqlConfigTest.test_admin_login_page_renders_token_login_form_without_database tests.test_mysql_config.MysqlConfigTest.test_admin_login_api_validates_token_without_admin_header tests.test_mysql_config.MysqlConfigTest.test_user_upload_page_posts_to_user_file_api_with_bearer_token tests.test_mysql_config.MysqlConfigTest.test_public_share_page_downloads_with_inline_extract_code tests.test_mysql_config.MysqlConfigTest.test_build_encrypted_shard_manifest_records_hashes tests.test_mysql_config.MysqlConfigTest.test_user_file_upload_records_shard_metadata_and_audit
 python -B -m unittest tests.test_mysql_config.MysqlConfigTest.test_password_hash_verification_accepts_correct_password tests.test_mysql_config.MysqlConfigTest.test_password_verification_rejects_corrupted_hashes tests.test_mysql_config.MysqlConfigTest.test_point_helpers_calculate_share_and_node_download_points tests.test_mysql_config.MysqlConfigTest.test_validate_share_access_rejects_expired_active_share tests.test_mysql_config.MysqlConfigTest.test_validate_share_access_rejects_exhausted_active_share tests.test_mysql_config.MysqlConfigTest.test_validate_share_access_treats_naive_expiry_as_server_local_time tests.test_mysql_config.MysqlConfigTest.test_wallet_login_message_contains_nonce_and_purpose tests.test_mysql_config.MysqlConfigTest.test_default_database_engine_is_postgresql tests.test_mysql_config.MysqlConfigTest.test_postgres_environment_variables_are_preferred tests.test_mysql_config.MysqlConfigTest.test_mysql_environment_variables_are_preferred tests.test_mysql_config.MysqlConfigTest.test_dotenv_file_can_populate_environment_without_overwriting_existing tests.test_mysql_config.MysqlConfigTest.test_database_initializer_executes_init_sql_without_selected_database tests.test_mysql_config.MysqlConfigTest.test_mysql_initializer_ignores_duplicate_file_column_alters tests.test_mysql_config.MysqlConfigTest.test_mysql_initializer_ignores_duplicate_owner_index_creation tests.test_mysql_config.MysqlConfigTest.test_database_initializer_failure_updates_server_error tests.test_mysql_config.MysqlConfigTest.test_create_share_requires_owned_file_and_hashes_extract_code tests.test_mysql_config.MysqlConfigTest.test_create_share_retries_duplicate_share_code_collision tests.test_mysql_config.MysqlConfigTest.test_public_share_verify_checks_extract_code tests.test_mysql_config.MysqlConfigTest.test_share_download_logs_download_and_point_ledger_entries
 python -B -m unittest tests.test_mysql_config.MysqlConfigTest.test_client_storage_route_rejects_hostile_origin_or_referer
-python -B -m py_compile server_main.py client/__init__.py client/main.py client/config.py client/console.py client/node_mac.py app/config.py app/database.py app/routes/__init__.py app/routes/pages.py app/services/auth.py app/services/files.py app/services/points.py app/services/shares.py app/services/withdrawals.py app/services/runtime.py app/services/ipfs.py app/services/nodes.py app/services/storage.py app/web/pages.py
+python -B -m py_compile server_main.py client/__init__.py client/main.py client/config.py client/console.py client/node_mac.py app/__init__.py app/config.py app/database.py app/routes/__init__.py app/routes/admin.py app/routes/auth.py app/routes/finance.py app/routes/files.py app/routes/nodes.py app/routes/pages.py app/services/__init__.py app/services/auth.py app/services/files.py app/services/points.py app/services/shares.py app/services/withdrawals.py app/services/runtime.py app/services/ipfs.py app/services/nodes.py app/services/storage.py app/web/__init__.py app/web/pages.py
 ```
 
 结果：
 
-- `tests.test_mysql_config`：198 tests OK
+- `tests.test_mysql_config`：199 tests OK
+- 文件上传、用户分享、公开分享下载相关 32 条用例：OK
 - Flask 结构、页面蓝图、分片上传相关 9 条用例：OK
 - 认证、积分、分享、数据库配置/初始化相关 19 条用例：OK
 - `test_client_storage_route_rejects_hostile_origin_or_referer` 单测重跑：OK
@@ -191,6 +209,7 @@ python -B -m py_compile server_main.py client/__init__.py client/main.py client/
 - 客户端入口、旧 Mac 客户端、配置示例和打包脚本归档到 `client/` 目录。
 - 服务端模板拆分后，测试改为组合检查 HTML 结构和静态 CSS / JS 行为。
 - 服务端模块归属 Flask 目录结构：`app.config`、`app.routes`、`app.services`、`app.web`。
+- 用户文件与分享 API 归属 `app.routes.files`，不再由 `server_main.py` 直接挂载。
 - `auth.py`、`points.py`、`shares.py`、`db.py`、`files.py`、`withdrawals.py` 的真实实现归档到 `app.services` / `app.database`，根目录兼容壳已删除。
 - `init_mysql.sql`、`init_postgresql.sql` 归档到 `app/schema/`。
 - `upload.html`、`download.html` 归档到 `app/templates/`，并拆分 `app/static/css/upload.css`、`app/static/js/upload.js`、`app/static/css/download.css`、`app/static/js/download.js`。
@@ -255,7 +274,7 @@ app/schema/
 app/routes/
 ```
 
-Flask 蓝图目录；当前 `pages.py` 接管首页、管理台页面、登录页、分享页和健康检查。
+Flask 蓝图目录；当前 `pages.py` 接管首页、管理台页面、登录页、分享页和健康检查，`files.py` 接管用户文件与分享下载 API。
 
 ```text
 app/services/runtime.py

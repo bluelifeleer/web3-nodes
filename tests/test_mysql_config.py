@@ -1349,6 +1349,11 @@ class MysqlConfigTest(unittest.TestCase):
         config_module = importlib.import_module("app.config")
         database_module = importlib.import_module("app.database")
         routes_package = importlib.import_module("app.routes")
+        admin_routes = importlib.import_module("app.routes.admin")
+        auth_routes = importlib.import_module("app.routes.auth")
+        file_routes = importlib.import_module("app.routes.files")
+        finance_routes = importlib.import_module("app.routes.finance")
+        node_routes = importlib.import_module("app.routes.nodes")
         auth_service = importlib.import_module("app.services.auth")
         files_service = importlib.import_module("app.services.files")
         points_service = importlib.import_module("app.services.points")
@@ -1404,6 +1409,62 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertFalse(list(Path("app/static").glob("*.css")))
         self.assertFalse(list(Path("app/static").glob("*.js")))
         self.assertTrue(callable(routes_package.register_blueprints))
+        for endpoint in (
+            "auth_api.auth_register",
+            "auth_api.auth_login",
+            "auth_api.auth_me",
+            "auth_api.auth_logout",
+            "auth_api.wallet_nonce",
+            "auth_api.wallet_bind",
+            "auth_api.wallet_login",
+        ):
+            self.assertEqual(server_main.app.view_functions[endpoint].__module__, auth_routes.__name__)
+        for endpoint in (
+            "node_api.node_register",
+            "node_api.node_heartbeat",
+            "node_api.node_list",
+            "node_api.reward_list",
+            "node_api.reward_daily",
+            "node_api.node_me",
+            "node_api.node_earnings",
+            "node_api.node_withdrawal_list",
+            "node_api.node_withdrawal_create",
+            "node_api.leaderboard",
+            "node_api.invite_tree",
+        ):
+            self.assertEqual(server_main.app.view_functions[endpoint].__module__, node_routes.__name__)
+        for endpoint in (
+            "finance_api.user_earnings",
+            "finance_api.user_points",
+            "finance_api.user_withdrawal_list",
+            "finance_api.user_withdrawal_create",
+            "finance_api.admin_withdrawal_list",
+            "finance_api.admin_withdrawal_review",
+        ):
+            self.assertEqual(server_main.app.view_functions[endpoint].__module__, finance_routes.__name__)
+        for endpoint in (
+            "admin_api.admin_storage_audit_list",
+            "admin_api.admin_storage_audit_export",
+            "admin_api.admin_user_list",
+            "admin_api.admin_share_list",
+            "admin_api.admin_download_list",
+            "admin_api.admin_point_list",
+        ):
+            self.assertEqual(server_main.app.view_functions[endpoint].__module__, admin_routes.__name__)
+        for endpoint in (
+            "files_api.user_file_upload",
+            "files_api.user_file_list",
+            "files_api.user_file_detail",
+            "files_api.user_file_delete",
+            "files_api.user_file_share_create",
+            "files_api.user_share_list",
+            "files_api.user_share_update",
+            "files_api.user_share_delete",
+            "files_api.public_share_detail",
+            "files_api.public_share_verify",
+            "files_api.public_share_download",
+        ):
+            self.assertEqual(server_main.app.view_functions[endpoint].__module__, file_routes.__name__)
         self.assertIs(server_main.ensure_runtime_secrets, server_runtime.ensure_runtime_secrets)
         self.assertIs(server_main.parse_env_file_values, server_runtime.parse_env_file_values)
         self.assertIs(server_main.HOME_HTML, server_pages.HOME_HTML)

@@ -1,58 +1,92 @@
-# Web3 节点激励与文件分享系统
+# Web3 节点存储与文件分享系统
 
-这版先从首页进入：
+这是一个 Flask + 本地节点客户端的分布式存储原型。系统把用户上传文件加密切片后优先写入真实客户端节点目录，同时保留服务端兜底副本并尝试上传 IPFS 备份；下载时会验证切片 hash、合并密文、解密并再次校验原文件 hash。
+
+当前主入口：
 
 ```text
 http://127.0.0.1:8000
 ```
 
-首页会串联用户登录、上传文件、用户面板、后台登录、后台面板、节点接入和健康检查。
+核心角色：
 
-系统包含三条主线：
+- 用户端：注册登录、钱包绑定/钱包登录、上传文件、创建分享、提取码下载、积分收益、提现申请。
+- 管理端：节点状态、文件记录、IPFS 状态、存储审计、分享记录、下载日志、积分流水、提现审核。
+- 客户端节点：指定存储目录和容量、锁定/隐藏目录、保存加密分片、上报容量与心跳、提供本地管理页。
 
-- 后台管理：节点列表、文件记录、IPFS 状态、分享记录、下载记录、积分流水、提现审核。
-- 用户产品：注册登录、钱包绑定/钱包登录、上传文件、创建分享链接、分享下载、积分收益、提现申请。
-- 客户端节点：注册节点、上报心跳、统计本地 IPFS 存储占用、绑定上级邀请码。
+默认推荐 PostgreSQL，保留 MySQL 兼容。
 
-默认推荐 PostgreSQL，同时保留 MySQL 兼容。
+## 当前代码审查摘要
 
-## 工程归档
+本次审查覆盖了根目录入口、`app/` 服务端模块、`client/` 客户端模块、schema、模板静态资源和 `tests/test_mysql_config.py`。当前结构已经从单文件原型整理为 Flask 目录结构，但仍保留一部分兼容入口。
 
-本轮管理台拆分、客户端控制台动态刷新、Python 模块拆分和验证记录见：
+主要结论：
+
+- `app/routes/` 已接管页面、认证、节点、财务、后台管理、用户文件与分享 API。
+- `app/services/` 已承载认证、分享、积分、提现、IPFS、存储、节点展示等纯逻辑。
+- `client/main.py` 仍偏大，包含本地 HTTP 管理服务、分片读写、心跳、代理收益/提现等逻辑；后续适合继续拆出 `client/storage.py` 和 `client/manage_server.py`。
+- `server_main.py` 仍保留旧后台上传、传统文件列表/下载、地图位置、自动修复、加密/下载核心 helper 和数据库事务兼容入口。
+- 当前 AES 实现使用 ECB 模式以兼容既有测试和流程；生产级加密建议后续升级为 AES-GCM 或带认证的 CBC/CTR 方案，并迁移旧数据。
+
+工程归档记录：
 
 ```text
 docs/engineering/2026-06-29-console-modularization-archive.md
 ```
 
-## 1. 环境准备
+## 目录结构
 
-需要安装：
+```text
+web3-nodes/
+  server_main.py                 服务端兼容启动入口和未拆完的核心 helper
+  requirements.txt               Python 依赖
+  app/
+    config.py                    服务端环境配置
+    database.py                  数据库连接、初始化、方言辅助
+    routes/                      Flask Blueprint
+      pages.py                   首页、登录页、管理台、分享页、健康检查
+      auth.py                    用户认证和钱包 API
+      nodes.py                   节点注册、心跳、排行榜、节点收益
+      files.py                   用户文件、分享、公开下载 API
+      finance.py                 用户收益/提现、后台提现审核
+      admin.py                   后台审计、用户/分享/下载/积分列表
+    services/                    业务 helper
+    schema/                      PostgreSQL / MySQL 初始化 SQL
+    templates/                   Jinja 页面模板
+    static/css, static/js        页面样式和交互脚本
+  client/
+    main.py                      客户端节点入口和本地管理服务
+    config.py                    客户端配置和启动参数解析
+    console.py                   本地节点控制台 HTML
+    node_config.example.json     节点配置示例
+  tests/test_mysql_config.py     主要回归测试
+```
 
-- Python 3.8+
-- PostgreSQL 13+，推荐
-- MySQL 5.7 / 8.0，可选兼容模式
-- IPFS Kubo，本地文件上传/下载需要
+## 环境要求
 
-安装 Python 依赖：
+- Python 3.10+，代码使用 `str | None` 等 3.10 类型语法。
+- PostgreSQL 13+，推荐。
+- MySQL 5.7 / 8.0，可选兼容模式。
+- IPFS Kubo，可选但推荐；真实节点写入成功时，IPFS 作为兜底备份。
+
+安装依赖：
 
 ```powershell
 cd C:\Users\HUAWEI\www\web3-nodes
 pip install -r requirements.txt
 ```
 
-如果依赖下载慢，可以使用国内镜像：
+国内镜像：
 
 ```powershell
 pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 ```
 
-## 2. 配置 `.env`
+## 服务端配置
 
-项目会自动读取根目录 `.env`。仓库没有强制提供 `.env.example`，可以直接新建 `.env`。
+项目会读取根目录 `.env`。如果 `ADMIN_API_TOKEN`、`SESSION_SECRET`、`AES_KEY` 缺失，服务端启动时会自动生成并追加写入 `.env`。
 
-`ADMIN_API_TOKEN`、`SESSION_SECRET`、`AES_KEY` 可以不手动填写。服务端首次启动时如果发现缺失，会自动生成、写入 `.env`，并在命令行打印，方便复制。
-
-PostgreSQL 推荐配置：
+PostgreSQL 示例：
 
 ```env
 DB_ENGINE=postgresql
@@ -65,7 +99,7 @@ POSTGRES_DB_NAME=web3_modes_store
 MAX_UPLOAD_MB=100
 ```
 
-MySQL 兼容配置：
+MySQL 示例：
 
 ```env
 DB_ENGINE=mysql
@@ -78,154 +112,141 @@ MYSQL_DB_NAME=web3_modes_store
 MAX_UPLOAD_MB=100
 ```
 
+可选配置：
+
+```env
+ADMIN_API_TOKEN=后台登录Token
+SESSION_SECRET=用户登录Token签名密钥
+AES_KEY=16字节AES密钥
+
+AMAP_WEB_KEY=高德Web Key
+AMAP_SECURITY_JSCODE=高德安全密钥
+
+IPFS_API_ADDR=/ip4/127.0.0.1/tcp/5001
+IPFS_API_URL=http://127.0.0.1:5001
+NODE_STORAGE_API_URL_TEMPLATE=http://127.0.0.1:{port}
+```
+
 说明：
 
-- `DB_ENGINE=postgresql` 时使用 `app/schema/init_postgresql.sql`。
-- `DB_ENGINE=mysql` 时使用 `app/schema/init_mysql.sql`。
-- `ADMIN_API_TOKEN` 用于后台登录。
-- `SESSION_SECRET` 用于用户登录 Token。
-- `AES_KEY` 当前代码使用 AES，需要 16 字节字符串；自动生成时会生成可用长度。
-- `AMAP_WEB_KEY` 和 `AMAP_SECURITY_JSCODE` 可选，用于后台节点地图；两者缺一时后台会自动降级为节点分布看板，避免地图 SDK 报 `INVALID_USER_KEY` / `INVALID_USER_SCODE`。
-- 不要提交真实 `.env`，仓库已忽略 `.env`。
+- `DB_ENGINE=postgresql` 使用 `app/schema/init_postgresql.sql`。
+- `DB_ENGINE=mysql` 使用 `app/schema/init_mysql.sql`。
+- `AES_KEY` 必须是 16 字节字符串；自动生成值满足当前代码要求。
+- 高德地图配置两项都存在时才加载地图 SDK，否则后台降级为普通节点看板。
+- IPFS API 地址优先读取 `IPFS_API_ADDR` / `IPFS_API_MULTIADDR` / `IPFS_API_URL`，未配置时会尝试 `ipfs config Addresses.API`，最后才退回 `127.0.0.1:5001`。
 
-## 3. 数据库初始化
+## 数据库初始化
 
-正常情况下不需要手动执行 SQL。
+服务端启动时会自动初始化数据库和表结构。一般不需要手动执行 SQL。
 
-启动服务端时会自动执行：
-
-- PostgreSQL：检查并创建 `POSTGRES_DB_NAME`，再执行 `app/schema/init_postgresql.sql`。
-- MySQL：连接 MySQL 后执行 `app/schema/init_mysql.sql`。
-
-只有启动失败或排查数据库权限时，才需要手动执行：
+手动初始化 PostgreSQL：
 
 ```powershell
 psql -h 127.0.0.1 -p 5432 -U postgres -d web3_modes_store -f app/schema/init_postgresql.sql
 ```
 
-或：
+手动初始化 MySQL：
 
 ```powershell
 mysql -h 127.0.0.1 -P 3306 -u root -p < app/schema/init_mysql.sql
 ```
 
-## 4. 启动 IPFS
+## 启动 IPFS
 
-文件上传和分享下载需要本地 IPFS API。
+推荐先启动 Kubo：
 
 ```powershell
 ipfs daemon
 ```
 
-保持这个窗口运行。再新开一个终端验证：
+验证 API 地址：
 
 ```powershell
+ipfs config Addresses.API
 ipfs stats repo --human
 ```
 
-如果能输出仓库大小，说明本地 IPFS 可用。
-
-如果 `ipfs daemon` 出现类似下面的 mDNS 警告：
+如果你的 Kubo 输出类似：
 
 ```text
-mdns: Failed to set multicast interface: setsockopt: An invalid argument was supplied.
+RPC API server listening on /ip4/127.0.0.1/tcp/5002
 ```
 
-通常是 Windows 某个网络适配器不支持组播接口导致的局域网发现警告。只要 `ipfs stats repo --human` 和 API 端口可用，上传备份一般不受影响。如果希望关闭这个提示，可以执行：
+可以写入 `.env`：
 
-```powershell
-ipfs config --json Discovery.MDNS.Enabled false
+```env
+IPFS_API_ADDR=/ip4/127.0.0.1/tcp/5002
 ```
 
-然后重启 `ipfs daemon`。
+Kubo 0.42 等新版本如果被 `ipfshttpclient` 判定版本不兼容，代码会自动切换到内置 HTTP API 客户端。
 
-## 5. 启动服务端
-
-新开终端：
+## 启动服务端
 
 ```powershell
 cd C:\Users\HUAWEI\www\web3-nodes
 python server_main.py
 ```
 
-看到下面输出代表服务启动成功：
-
-```text
-完整服务启动成功！后台地址：http://127.0.0.1:8000
-```
-
-如果自动生成了运行密钥，还会看到类似：
-
-```text
-已自动生成运行密钥，并写入 .env：
-ADMIN_API_TOKEN=...
-SESSION_SECRET=...
-AES_KEY=...
-后台登录地址：http://127.0.0.1:8000/admin/login
-```
-
-服务监听：
+服务端监听：
 
 ```text
 http://127.0.0.1:8000
 ```
 
-## 6. 首页和后台管理使用
-
-打开首页：
+常用入口：
 
 ```text
-http://127.0.0.1:8000
+http://127.0.0.1:8000/
+http://127.0.0.1:8000/admin/login
+http://127.0.0.1:8000/admin
+http://127.0.0.1:8000/user/login
+http://127.0.0.1:8000/user/upload
+http://127.0.0.1:8000/user/dashboard
+http://127.0.0.1:8000/console
 ```
 
-首页包含用户、节点和后台所有核心入口。
+健康检查：
 
-首次进入后台建议打开登录页：
+```text
+GET /api/health
+```
+
+## 管理端
+
+打开：
 
 ```text
 http://127.0.0.1:8000/admin/login
 ```
 
-输入 `.env` 中的 `ADMIN_API_TOKEN` 登录。登录成功后页面会把后台 Token 保存到浏览器：
+输入 `.env` 中的 `ADMIN_API_TOKEN`。登录成功后页面会把 token 保存为：
 
 ```text
 localStorage.admin_token
 ```
 
-之后访问后台：
+管理端功能：
+
+- 节点列表、在线状态、容量、带宽、质量分。
+- 节点收益、排行榜、邀请树。
+- 文件记录、文件副本健康、IPFS 状态。
+- 用户、分享、下载日志、积分流水。
+- 用户/节点提现审核。
+- 存储审计日志筛选和导出。
+
+后台 API 通过 `X-Admin-Token` 或 `admin_token` 查询参数鉴权。
+
+审计导出：
 
 ```text
-http://127.0.0.1:8000/admin
+GET /api/admin/audit/storage
+GET /api/admin/audit/storage/export?format=json
+GET /api/admin/audit/storage/export?format=csv
 ```
 
-后台会自动加载数据；如果没有 Token，会自动跳回 `/admin/login`。
+## 用户端
 
-后台可用功能：
-
-- 查看节点列表和在线状态
-- 查看节点存储、带宽、在线时长
-- 配置分成比例
-- 查看文件记录、搜索文件、查看 IPFS CID
-- 查看文件副本健康状态
-- 查看 IPFS 状态
-- 查看用户分享记录
-- 查看下载记录
-- 查看积分流水
-- 审核用户提现申请
-
-后台页面会每 10 秒自动刷新节点、收益、文件、排行榜、邀请树、IPFS 状态和地图数据，同时保留手动刷新按钮。
-
-后台管理上传仍走原后台 Token 流程：
-
-- 旧静态上传/下载页已归档到 `app/templates/upload.html`、`app/templates/download.html`，样式和脚本位于 `app/static/css/`、`app/static/js/`；当前推荐使用 `/user/upload`。
-- 上传接口：`/api/upload_file`
-- 需要后台 Token 鉴权
-
-## 7. 用户端使用
-
-### 注册 / 登录
-
-打开：
+登录注册：
 
 ```text
 http://127.0.0.1:8000/user/login
@@ -233,139 +254,52 @@ http://127.0.0.1:8000/user/login
 
 支持：
 
-- 用户名密码注册
-- 用户名密码登录
-- 钱包登录
+- 用户名密码注册/登录。
+- 钱包 nonce 签名登录。
+- 登录后 token 保存为 `localStorage.user_token`。
 
-登录成功后，页面会把返回的用户 Token 保存到浏览器：
-
-```text
-localStorage.user_token
-```
-
-后续 `/user/dashboard` 和 `/user/upload` 会自动使用这个 Token。
-
-### 用户面板
-
-打开：
-
-```text
-http://127.0.0.1:8000/user/dashboard
-```
-
-用户面板会展示：
-
-- 当前账号和钱包
-- 已上传文件
-- 已创建分享
-- 积分流水
-- 累计收益
-- 已提现金额
-- 冻结中提现
-- 可提现余额
-- 提现记录
-
-### 钱包绑定
-
-在 `/user/dashboard` 的钱包绑定区域：
-
-1. 填写钱包地址。
-2. 点击获取绑定 nonce。
-3. 用钱包签名页面展示的 message。
-4. 填入 nonce 和签名并提交绑定。
-
-绑定成功后，可在 `/user/login` 使用钱包登录。
-
-### 上传文件
-
-打开：
+上传：
 
 ```text
 http://127.0.0.1:8000/user/upload
+POST /api/user/files
 ```
 
-上传流程：
-
-1. 先登录，确保浏览器里有 `localStorage.user_token`。
-2. 选择文件。
-3. 选择公开或私有。
-4. 点击上传。
-5. 上传成功后页面会显示 `file_hash`。
-
-当前新版用户上传文件不再暴露原始裸下载链接，必须创建分享链接后下载。
-
-### 创建分享链接
-
-在 `/user/upload` 上传成功后，可以继续填写：
-
-- 提取码，可选
-- 过期时间，可选
-- 最大下载次数，`0` 表示不限次数
-
-点击创建分享后，会得到：
+用户上传需要真实可用客户端节点。没有可用节点时接口会返回：
 
 ```text
-http://127.0.0.1:8000/s/<share_code>
+暂无可用用户节点，请先启动节点客户端后再上传
 ```
 
-分享接口：
+分享：
 
 ```text
 POST /api/user/files/<file_hash>/shares
+GET /api/user/shares
+PATCH /api/user/shares/<share_code>
+DELETE /api/user/shares/<share_code>
 ```
 
-### 访问分享和下载
-
-别人打开：
+公开访问：
 
 ```text
-http://127.0.0.1:8000/s/<share_code>
-```
-
-页面会自动读取：
-
-```text
+GET /s/<share_code>
 GET /api/share/<share_code>
-```
-
-如果分享需要提取码，页面内会显示输入框，不会弹窗。
-
-点击下载时调用：
-
-```text
+POST /api/share/<share_code>/verify
 GET /api/share/<share_code>/download
 ```
 
-下载成功后系统会：
+分享支持提取码、过期时间、最大下载次数和启停状态。下载成功后会记录下载日志、更新下载次数，并写入用户分享积分和节点下载积分。
 
-- 记录下载日志
-- 增加分享下载次数
-- 给分享文件的用户增加分享下载积分
-- 给存储节点增加节点下载积分
+## 客户端节点
 
-过期、停用、删除、次数用完或提取码错误时，下载接口会拒绝访问。
-
-### 提现
-
-用户在 `/user/dashboard` 可提交提现申请。
-
-要求：
-
-- 用户已绑定钱包
-- 可提现余额足够
-- 提现金额大于等于最小精度
-
-后台管理员在管理端审核提现。
-
-## 8. 启动客户端节点
-
-复制节点配置：
+复制示例配置：
 
 ```powershell
 copy client\node_config.example.json node_config.json
 ```
 
-示例配置：
+示例：
 
 ```json
 {
@@ -379,33 +313,36 @@ copy client\node_config.example.json node_config.json
 }
 ```
 
-客户端不再默认使用内置目录作为有效存储。首次启动必须显式指定存储目录和愿意贡献的可用容量，否则节点只会启动本地管理页并提示配置目录，不会作为健康存储节点参与分片写入。
-
-推荐启动方式：
+首次作为真实存储节点使用时，必须指定存储目录和容量：
 
 ```powershell
 python -m client.main --storage-dir=D:\web3-node-data --storage-quota-gb=100 --manage-port=8787
 ```
 
-也可以写入 `node_config.json`：
-
-```json
-{
-  "storage_dir": "D:/web3-node-data",
-  "storage_quota_gb": 100,
-  "manage_port": 8787
-}
-```
-
-或使用环境变量：
+也可以用环境变量：
 
 ```powershell
+$env:NODE_SERVER_URL="http://127.0.0.1:8000"
 $env:NODE_STORAGE_DIR="D:\web3-node-data"
 $env:NODE_STORAGE_QUOTA_GB="100"
+$env:NODE_MANAGE_PORT="8787"
 python -m client.main
 ```
 
-配置后客户端会自动创建目录锁和隐藏存储根：
+客户端启动后默认自动打开本地管理页：
+
+```text
+http://127.0.0.1:8787
+```
+
+如需关闭自动打开浏览器：
+
+```powershell
+$env:NODE_OPEN_CLIENT_CONSOLE="0"
+python -m client.main --storage-dir=D:\web3-node-data --storage-quota-gb=100
+```
+
+本地存储结构：
 
 ```text
 D:\web3-node-data
@@ -415,258 +352,193 @@ D:\web3-node-data
     manifest\
 ```
 
-说明：
+规则：
 
-- `.web3_nodes.lock` 会绑定 `user_addr` 和 `node_mac`，避免多个节点误用同一目录。
+- `.web3_nodes.lock` 绑定 `user_addr` 和 `node_mac`，防止多个节点误用同一目录。
 - `.web3_nodes_store` 保存加密分片和 manifest，不保存明文文件。
-- Windows 下会尝试对 `.web3_nodes_store` 执行隐藏/系统属性；失败不会删除数据，但会在目录健康状态里提示。
-- 心跳会上报物理总容量、目录已用容量、物理可用容量、用户声明的 `storage_quota_gb` 和计算后的 `storage_available_gb`。
+- Windows 下会尝试给 `.web3_nodes_store` 设置隐藏/系统属性。
+- 心跳会上报目录容量、声明容量、已用容量、可写剩余额度和本地分片 API 地址。
+- 节点控制台可动态刷新状态、收益、提现和存储目录检查结果。
 
-客户端启动后会同时拉起本地管理页：
-
-```text
-http://127.0.0.1:8787
-```
-
-如果你改了 `--manage-port`、`manage_port` 配置或 `NODE_MANAGE_PORT`，管理页地址会随之变化。
-
-本地管理页当前提供：
-
-- 目录健康检查：显示目录是否可写、是否锁定、最近一次检测错误和当前路径。
-- 容量上报概览：总容量、已使用、物理可用容量、声明可用容量、剩余可写额度。
-- 收益与提现：通过本地 `/api/earnings`、`/api/withdrawals` 代理读取服务端节点收益和提现记录，并可从本地页提交提现申请。
-- 分片存储 API：服务端可写入/读取加密分片，客户端按 `file_hash/chunk_index` 保存并维护 manifest。
-- 控制操作：支持安全停止节点；`重启节点` 第一版只返回提示，开发模式暂不执行自动进程替换。
-
-## 9. 分片存储、下载校验与兜底
-
-用户文件上传后，服务端会：
-
-1. 计算原文件 `file_hash = sha256(plain)`。
-2. AES 加密完整文件。
-3. 对密文切片并为每个分片生成 `chunk_hash`。
-4. 将加密分片下发到真实客户端节点目录。
-5. 写入 `file_shard_record` 分片元数据。
-6. 同时保存一份服务端模拟节点兜底副本，并尝试上传 IPFS 备份。
-
-下载时会优先从真实客户端节点读取分片，逐片验证 `chunk_hash`，按 `chunk_index` 合并密文，解密后再次验证 `sha256(plain) == file_hash`。只有完整校验通过后才返回文件并记录下载收益；客户端分片不可用时会依次尝试服务端兜底副本和 IPFS 备份。
-
-## 10. 存储审计日志与导出
-
-后台 `/admin` 页面包含“存储审计日志”区域，可按 `file_hash`、节点地址、事件类型、状态筛选并刷新，点击“详情”查看 `metadata_json`。
-
-后台 API：
+客户端本地 API 只绑定 `127.0.0.1`，并校验 Host、Origin/Referer 和 CSRF token。服务端写入分片使用：
 
 ```text
-GET /api/admin/audit/storage
-GET /api/admin/audit/storage/export?format=json
-GET /api/admin/audit/storage/export?format=csv
+POST /api/node/storage/shards
+GET /api/node/storage/shards/<file_hash>/<chunk_index>
+GET /api/node/storage/files/<file_hash>/manifest
 ```
 
-所有后台审计接口都需要 `X-Admin-Token` 或 `admin_token`。审计日志覆盖上传接收、加密切片、客户端分片写入/读取、hash 校验失败、解密失败、server/IPFS 兜底使用和最终下载成功等事件。
+## 文件存储和下载链路
 
-说明：
+用户上传文件：
 
-- 本地管理页的浏览器操作始终调用本地 `127.0.0.1` 接口，再由客户端代理访问服务端节点 API。
-- `/api/storage` 更新目录后会立即重新检测，并把新的目录状态用于后续容量上报。
-- `停止节点` 会把客户端切换为停止状态，后续心跳循环会结束；默认不会直接强杀当前 Python 进程。
-- `重启节点` 当前只返回“开发模式暂不支持自动重启，请手动重新运行 python -m client.main”，避免误触发危险的进程替换。
-- 客户端默认不再自动打开 pywebview 地图窗口，避免 Windows WebView 临时数据目录被占用时出现清理警告；确实需要地图窗口时，先配置 `AMAP_WEB_KEY`、`AMAP_SECURITY_JSCODE`，再设置 `$env:NODE_OPEN_MAP_WINDOW="1"` 后启动客户端。
+1. 服务端计算 `file_hash = sha256(plain)`。
+2. 使用 `AES_KEY` 加密完整文件。
+3. 对密文按 `SHARD_SIZE` 切片。
+4. 为每片生成 `chunk_hash` 和 manifest。
+5. 选择有容量和本地 API 的真实客户端节点。
+6. 下发加密分片到客户端目录。
+7. 写入 `file_chain_record`、`file_shard_record` 和 `storage_audit_log`。
+8. 写入服务端兜底副本，并尝试上传 IPFS 备份。
 
-正常输出类似：
+用户下载分享文件：
+
+1. 校验分享状态、提取码、过期时间、下载次数。
+2. 优先从真实客户端节点读取分片。
+3. 校验每个 `chunk_hash`。
+4. 按 `chunk_index` 合并密文。
+5. 解密并校验 `sha256(plain) == file_hash`。
+6. 如果真实节点不可用，尝试服务端兜底副本和 IPFS 备份。
+7. 校验通过后返回附件，并写入下载日志和积分流水。
+
+## 旧后台上传接口
+
+仍保留旧后台上传/下载能力，主要用于兼容和管理端测试：
 
 ```text
-Web3分布式存储激励节点启动成功
-节点注册成功
-节点持续运行中，实时上报存储数据...
-心跳上报成功
+POST /api/upload_check
+POST /api/upload_chunk
+POST /api/upload_merge
+POST /api/upload_file
+GET  /api/file_list
+GET  /api/file_health
+GET  /api/file_download/<file_hash>
 ```
 
-后台节点列表能看到该节点，就说明客户端心跳正常。
+普通用户上传和分享应优先使用 `/user/upload` 与 `/api/user/files`。
 
-如果服务端暂时未启动或网络中断，客户端不会退出；它会按 `reconnect_interval` 自动重试注册。注册成功后才进入心跳循环，心跳失败也会继续等待下一轮上报。
+## 邀请码和节点收益
 
-## 11. 邀请码 / 上级绑定
-
-客户端支持通过启动参数指定上级邀请码：
+客户端支持指定上级邀请码：
 
 ```powershell
-python -m client.main invite=你的邀请码
+python -m client.main --invite=你的邀请码 --storage-dir=D:\web3-node-data --storage-quota-gb=100
 ```
 
 或：
 
-```powershell
-python -m client.main --invite=你的邀请码
+```env
+NODE_PARENT_INVITE=你的邀请码
 ```
 
-也可以在 `node_config.json` 中配置：
-
-```json
-{
-  "parent_invite": "你的邀请码"
-}
-```
-
-客户端还支持环境变量覆盖：
-
-```powershell
-$env:NODE_SERVER_URL="http://127.0.0.1:8000"
-$env:NODE_PARENT_INVITE="你的邀请码"
-$env:NODE_HEARTBEAT_INTERVAL="60"
-$env:NODE_RECONNECT_INTERVAL="10"
-$env:NODE_STORAGE_DIR="D:\web3-node-data"
-python -m client.main
-```
-
-## 12. IPFS 安装
-
-项目调用本地 IPFS 命令和 API：
-
-```powershell
-ipfs stats repo --human
-ipfs daemon
-```
-
-推荐安装官方 Kubo 命令行版本。
-
-### Windows
-
-打开官方文档：
+节点收益和提现：
 
 ```text
-https://docs.ipfs.tech/install/command-line/
+GET  /api/node/me
+GET  /api/node/earnings
+GET  /api/node/withdrawals
+POST /api/node/withdrawals
 ```
 
-下载 Windows 压缩包，解压后把 `ipfs.exe` 所在目录加入系统 `PATH`。
-
-验证：
-
-```powershell
-ipfs --version
-ipfs init
-ipfs daemon
-```
-
-### macOS
-
-推荐 Homebrew：
-
-```bash
-brew install ipfs
-ipfs --version
-ipfs init
-ipfs daemon
-```
-
-### Linux
-
-常见 amd64 服务器：
-
-```bash
-wget https://dist.ipfs.tech/kubo/latest/kubo_latest_linux-amd64.tar.gz
-tar -xvzf kubo_latest_linux-amd64.tar.gz
-cd kubo
-sudo bash install.sh
-ipfs --version
-ipfs init
-ipfs daemon
-```
-
-### Docker
-
-```bash
-docker run -d --name ipfs_host \
-  -v ipfs_staging:/export \
-  -v ipfs_data:/data/ipfs \
-  -p 4001:4001 \
-  -p 127.0.0.1:5001:5001 \
-  -p 127.0.0.1:8080:8080 \
-  ipfs/kubo:latest
-```
-
-建议只把 `5001` API 端口绑定到 `127.0.0.1`，不要直接暴露公网。
-
-## 13. 常见问题
-
-### 网页打不开
-
-检查服务端是否真正启动：
-
-```powershell
-python server_main.py
-```
-
-如果启动失败，优先检查：
-
-- 数据库服务是否启动
-- `.env` 数据库账号密码是否正确
-- 端口 `8000` 是否被占用
-- Python 依赖是否安装完整
-
-### 后台登录 / Token
-
-后台现在有独立登录页：
+用户收益和提现：
 
 ```text
-http://127.0.0.1:8000/admin/login
+GET  /api/user/earnings
+GET  /api/user/points
+GET  /api/user/withdrawals
+POST /api/user/withdrawals
 ```
 
-输入 `.env` 里的：
+## 常见问题
+
+### 上传提示没有可用节点
+
+检查：
+
+- 客户端是否用 `python -m client.main` 启动。
+- 是否指定了 `--storage-dir` 和 `--storage-quota-gb`。
+- 客户端本地管理页是否显示目录健康。
+- 服务端后台节点列表是否显示 `storage_api_url`、可用容量和最近心跳。
+
+### IPFS 显示离线但 daemon 已启动
+
+先看 Kubo 实际 API 端口：
+
+```powershell
+ipfs config Addresses.API
+```
+
+如果不是 5001，在 `.env` 配置：
+
+```env
+IPFS_API_ADDR=/ip4/127.0.0.1/tcp/5002
+```
+
+重启服务端后再查看后台 IPFS 状态。
+
+### `Unsupported daemon version`
+
+新 Kubo 版本可能不被 `ipfshttpclient` 支持。当前代码会在遇到该错误时自动使用 HTTP API 兜底客户端；确认 `.env` 的 IPFS API 地址正确即可。
+
+### 用户登录提示密钥未配置
+
+确认 `.env` 中有：
+
+```env
+SESSION_SECRET=...
+```
+
+没有时重启服务端，代码会自动生成。
+
+### 后台登录失败
+
+确认 `.env` 中有：
 
 ```env
 ADMIN_API_TOKEN=...
 ```
 
-登录后再进入后台首页。Token 失效时后台会自动清除本地 Token 并回到登录页。
+并通过 `/admin/login` 登录，不要直接手动构造后台请求。
 
-### 用户登录接口提示登录密钥未配置
+## 测试和验证
 
-检查 `.env` 是否配置：
-
-```env
-SESSION_SECRET=请改成一串随机字符串
-```
-
-修改 `.env` 后需要重启服务端。
-
-### 数据库连接失败
-
-检查：
-
-- `DB_ENGINE` 是否为 `postgresql` 或 `mysql`
-- PostgreSQL / MySQL 服务是否启动
-- 数据库账号是否有创建数据库和建表权限
-- 远程数据库端口是否可连接
-
-### IPFS 文件读取失败
-
-确认 IPFS daemon 正在运行：
+主要回归：
 
 ```powershell
-ipfs daemon
+python -B -m unittest tests.test_mysql_config
 ```
 
-并确认 API 端口 `5001` 可用。
-
-### 依赖报错 `ModuleNotFoundError`
-
-重新安装依赖：
+语法检查：
 
 ```powershell
-pip install -r requirements.txt
+python -B -m py_compile server_main.py client\__init__.py client\main.py client\config.py client\console.py client\node_mac.py app\__init__.py app\config.py app\database.py app\routes\__init__.py app\routes\admin.py app\routes\auth.py app\routes\finance.py app\routes\files.py app\routes\nodes.py app\routes\pages.py app\services\__init__.py app\services\auth.py app\services\files.py app\services\points.py app\services\shares.py app\services\withdrawals.py app\services\runtime.py app\services\ipfs.py app\services\nodes.py app\services\storage.py app\web\__init__.py app\web\pages.py
 ```
 
-## 14. 成功标准
+当前测试覆盖重点：
 
-全部满足即表示系统跑通：
+- 数据库配置和 schema 初始化。
+- 运行密钥自动生成。
+- 首页、后台、用户页、分享页模板与静态资源。
+- 客户端本地管理 API、CSRF、Host/Origin 防护。
+- 客户端目录锁定、隐藏、容量上报和心跳。
+- 用户文件上传、真实节点分片写入、IPFS 兜底。
+- 分享创建、提取码、过期/次数限制、下载积分。
+- IPFS API 地址识别和 HTTP API 兜底。
 
-- 服务端正常启动 `http://127.0.0.1:8000`
-- 后台页面可以打开
-- 后台登录后能自动加载并定时刷新节点/文件/收益数据
-- 用户可以注册登录
-- 用户可以上传文件并创建 `/s/<share_code>` 分享
-- 分享页可以按提取码/过期时间/下载次数限制下载
-- 下载后有下载日志和积分流水
-- 客户端节点可以注册并持续心跳
-- 后台节点列表能看到在线节点
+## 后续工程建议
+
+优先级较高：
+
+- 将 `client/main.py` 拆为 `client/storage.py`、`client/manage_server.py`、`client/heartbeat.py`。
+- 将 `server_main.py` 中旧后台上传、地图位置、自动修复和加密下载 helper 继续迁到 `app/routes/` 与 `app/services/`。
+- 将当前 AES-ECB 升级为带认证加密方案，并设计旧文件迁移策略。
+- 为审计日志增加更细的前端筛选和下载失败原因聚合。
+
+优先级中等：
+
+- 增加 `.env.example`。
+- 为客户端多目录配置补充正式 JSON schema。
+- 将首页 HTML 常量迁移为独立 Jinja 模板。
+
+## 跑通标准
+
+全部满足时，当前开发环境基本可用：
+
+- `python server_main.py` 正常启动。
+- `/api/health` 返回数据库正常。
+- `/admin/login` 可用 `ADMIN_API_TOKEN` 登录。
+- `python -m client.main --storage-dir=... --storage-quota-gb=...` 启动节点。
+- 后台节点列表显示节点在线、容量不为 0。
+- 用户可以注册登录、上传文件并创建 `/s/<share_code>`。
+- 分享页可以验证提取码并下载文件。
+- 后台能看到下载日志、积分流水和存储审计日志。
