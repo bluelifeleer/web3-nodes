@@ -673,15 +673,28 @@ def make_manage_handler(state):
         def _validate_host(self):
             if self._is_allowed_host(self.headers.get("Host", "")):
                 return True
+            self._discard_request_body()
             self._send_json({"ok": False, "error": "invalid host"}, status=403)
             return False
 
         def _validate_mutation_source(self):
             for header_name in ("Origin", "Referer"):
                 if not self._is_allowed_url_header(self.headers.get(header_name, "")):
+                    self._discard_request_body()
                     self._send_json({"ok": False, "error": "invalid request origin"}, status=403)
                     return False
             return True
+
+        def _discard_request_body(self):
+            try:
+                remaining = int(self.headers.get("Content-Length", "0") or 0)
+            except ValueError:
+                return
+            while remaining > 0:
+                chunk = self.rfile.read(min(remaining, 65536))
+                if not chunk:
+                    break
+                remaining -= len(chunk)
 
         def _read_json(self):
             try:
@@ -710,6 +723,7 @@ def make_manage_handler(state):
                 return None
             content_type = self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
             if content_type != "application/json":
+                self._discard_request_body()
                 self._send_json({"ok": False, "error": "content type must be application/json"}, status=400)
                 return None
             data = self._read_json()
