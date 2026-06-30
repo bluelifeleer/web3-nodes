@@ -1289,7 +1289,7 @@ class MysqlConfigTest(unittest.TestCase):
         self.assertIn("REQ1", params)
 
     def test_heartbeat_stores_capacity_fields_and_allows_old_payloads(self):
-        server_main = load_server_main()
+        server_main = load_server_main(BUSINESS_MODE="pcdn_partner", PCDN_PROVIDER="mock")
         executed = []
 
         class FakeCursor:
@@ -1321,6 +1321,8 @@ class MysqlConfigTest(unittest.TestCase):
 
         self.assertEqual(old_response.status_code, 200)
         self.assertEqual(new_response.status_code, 200)
+        self.assertEqual(old_response.get_json()["business_mode"], "pcdn_partner")
+        self.assertEqual(old_response.get_json()["pcdn_provider"], "mock")
         self.assertEqual(executed[0][1][2:8], ("", "unknown", "", 0.0, 2.5, 0.0))
         self.assertTrue(any("storage_total_gb" in sql for sql, _ in executed))
         self.assertIn("D:/web3-node-data", executed[-1][1])
@@ -2433,6 +2435,145 @@ class MysqlConfigTest(unittest.TestCase):
             else:
                 sys.modules["webview"] = old_webview
 
+    def test_client_config_reads_business_mode_from_dotenv_file(self):
+        old_requests = sys.modules.get("requests")
+        old_webview = sys.modules.get("webview")
+        old_business_mode = os.environ.get("BUSINESS_MODE")
+        old_pcdn_provider = os.environ.get("PCDN_PROVIDER")
+        old_node_business_mode = os.environ.get("NODE_BUSINESS_MODE")
+        env_path = Path("tests/client-dotenv.env")
+        env_path.write_text(
+            "BUSINESS_MODE=pcdn_partner\nPCDN_PROVIDER=mock\n",
+            encoding="utf-8",
+        )
+        try:
+            os.environ.pop("BUSINESS_MODE", None)
+            os.environ.pop("PCDN_PROVIDER", None)
+            os.environ.pop("NODE_BUSINESS_MODE", None)
+            sys.modules["requests"] = types.SimpleNamespace(post=lambda *args, **kwargs: None, get=lambda *args, **kwargs: None)
+            sys.modules["webview"] = None
+            sys.modules.pop("client", None)
+            sys.modules.pop("client.config", None)
+            sys.modules.pop("client.main", None)
+            client_module = importlib.import_module("client")
+
+            config = client_module.load_client_config("tests/missing-node-config.json", env_path=env_path)
+            state = client_module.create_client_state(
+                "http://127.0.0.1:8000",
+                "NODE_A",
+                "MAC_A",
+                "",
+                8787,
+                business_mode=config["business_mode"],
+                pcdn_provider=config["pcdn_provider"],
+            )
+
+            self.assertEqual(config["business_mode"], "pcdn_partner")
+            self.assertEqual(config["pcdn_provider"], "mock")
+            self.assertEqual(state["business_mode"], "pcdn_partner")
+            self.assertEqual(state["pcdn_provider"], "mock")
+            self.assertNotIn("BUSINESS_MODE", os.environ)
+            self.assertNotIn("PCDN_PROVIDER", os.environ)
+        finally:
+            env_path.unlink(missing_ok=True)
+            for key, value in (
+                ("BUSINESS_MODE", old_business_mode),
+                ("PCDN_PROVIDER", old_pcdn_provider),
+                ("NODE_BUSINESS_MODE", old_node_business_mode),
+            ):
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+            sys.modules.pop("client", None)
+            sys.modules.pop("client.config", None)
+            sys.modules.pop("client.main", None)
+            if old_requests is None:
+                sys.modules.pop("requests", None)
+            else:
+                sys.modules["requests"] = old_requests
+            if old_webview is None:
+                sys.modules.pop("webview", None)
+            else:
+                sys.modules["webview"] = old_webview
+
+    def test_client_config_reads_sidecar_files_when_packaged_as_exe(self):
+        old_requests = sys.modules.get("requests")
+        old_webview = sys.modules.get("webview")
+        old_executable = sys.executable
+        old_frozen = getattr(sys, "frozen", None)
+        old_business_mode = os.environ.get("BUSINESS_MODE")
+        old_node_business_mode = os.environ.get("NODE_BUSINESS_MODE")
+        old_pcdn_provider = os.environ.get("PCDN_PROVIDER")
+        old_node_pcdn_provider = os.environ.get("NODE_PCDN_PROVIDER")
+        old_skip_dotenv = os.environ.get("WEB3_NODES_SKIP_DOTENV")
+        with tempfile.TemporaryDirectory() as tmp:
+            exe_dir = Path(tmp)
+            (exe_dir / "node_config.json").write_text(
+                json.dumps({
+                    "server_url": "http://pcdn.example",
+                    "manage_port": 8899,
+                    "business_mode": "storage_share",
+                    "pcdn_provider": "mock",
+                }),
+                encoding="utf-8",
+            )
+            (exe_dir / ".env").write_text(
+                "BUSINESS_MODE=storage_share\nNODE_BUSINESS_MODE=pcdn_partner #storage_share/pcdn_partner\nPCDN_PROVIDER=mock\n",
+                encoding="utf-8",
+            )
+            try:
+                for key in ("BUSINESS_MODE", "NODE_BUSINESS_MODE", "PCDN_PROVIDER", "NODE_PCDN_PROVIDER"):
+                    os.environ.pop(key, None)
+                os.environ.pop("WEB3_NODES_SKIP_DOTENV", None)
+                sys.executable = str(exe_dir / "web3-node.exe")
+                sys.frozen = True
+                sys.modules["requests"] = types.SimpleNamespace(post=lambda *args, **kwargs: None, get=lambda *args, **kwargs: None)
+                sys.modules["webview"] = None
+                sys.modules.pop("client", None)
+                sys.modules.pop("client.config", None)
+                sys.modules.pop("client.main", None)
+                client_module = importlib.import_module("client")
+
+                config = client_module.load_client_config("node_config.json")
+
+                self.assertEqual(config["server_url"], "http://pcdn.example")
+                self.assertEqual(config["manage_port"], 8899)
+                self.assertEqual(config["business_mode"], "pcdn_partner")
+                self.assertEqual(config["pcdn_provider"], "mock")
+                self.assertNotIn("BUSINESS_MODE", os.environ)
+            finally:
+                sys.executable = old_executable
+                if old_frozen is None:
+                    try:
+                        delattr(sys, "frozen")
+                    except AttributeError:
+                        pass
+                else:
+                    sys.frozen = old_frozen
+                for key, value in (
+                    ("BUSINESS_MODE", old_business_mode),
+                    ("NODE_BUSINESS_MODE", old_node_business_mode),
+                    ("PCDN_PROVIDER", old_pcdn_provider),
+                    ("NODE_PCDN_PROVIDER", old_node_pcdn_provider),
+                    ("WEB3_NODES_SKIP_DOTENV", old_skip_dotenv),
+                ):
+                    if value is None:
+                        os.environ.pop(key, None)
+                    else:
+                        os.environ[key] = value
+                sys.modules.pop("client", None)
+                sys.modules.pop("client.config", None)
+                sys.modules.pop("client.main", None)
+                if old_requests is None:
+                    sys.modules.pop("requests", None)
+                else:
+                    sys.modules["requests"] = old_requests
+                if old_webview is None:
+                    sys.modules.pop("webview", None)
+                else:
+                    sys.modules["webview"] = old_webview
+
     def test_client_console_html_contains_node_operations(self):
         old_requests = sys.modules.get("requests")
         old_webview = sys.modules.get("webview")
@@ -2804,6 +2945,70 @@ class MysqlConfigTest(unittest.TestCase):
             self.assertFalse(state["heartbeat_ok"])
             self.assertEqual(state["last_heartbeat"], "")
             self.assertIn("500", state["last_error"])
+        finally:
+            sys.modules.pop("client", None)
+            if old_requests is None:
+                sys.modules.pop("requests", None)
+            else:
+                sys.modules["requests"] = old_requests
+            if old_webview is None:
+                sys.modules.pop("webview", None)
+            else:
+                sys.modules["webview"] = old_webview
+
+    def test_client_heartbeat_syncs_business_mode_from_server_response(self):
+        old_requests = sys.modules.get("requests")
+        old_webview = sys.modules.get("webview")
+
+        class FakeResponse:
+            status_code = 200
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {"code": 200, "business_mode": "pcdn_partner", "pcdn_provider": "mock"}
+
+        try:
+            sys.modules["requests"] = types.SimpleNamespace(post=lambda *args, **kwargs: None, get=lambda *args, **kwargs: None)
+            sys.modules["webview"] = None
+            sys.modules.pop("client", None)
+            client_module = importlib.import_module("client")
+            state = client_module.create_client_state("http://server", "NODE_A", "MAC_A", "D:/node", 8787)
+
+            ok, payload = client_module.report_heartbeat(state, 2.0, post_func=lambda *args, **kwargs: FakeResponse())
+
+            self.assertTrue(ok)
+            self.assertEqual(payload["disk_used"], 0)
+            self.assertEqual(state["business_mode"], "pcdn_partner")
+            self.assertEqual(state["pcdn_provider"], "mock")
+            self.assertEqual(client_module.client_status_payload(state)["business_mode"], "pcdn_partner")
+        finally:
+            sys.modules.pop("client", None)
+            if old_requests is None:
+                sys.modules.pop("requests", None)
+            else:
+                sys.modules["requests"] = old_requests
+            if old_webview is None:
+                sys.modules.pop("webview", None)
+            else:
+                sys.modules["webview"] = old_webview
+
+    def test_client_response_writer_ignores_browser_disconnects(self):
+        old_requests = sys.modules.get("requests")
+        old_webview = sys.modules.get("webview")
+
+        class AbortedWriter:
+            def write(self, body):
+                raise ConnectionAbortedError(10053, "browser closed request")
+
+        try:
+            sys.modules["requests"] = types.SimpleNamespace(post=lambda *args, **kwargs: None, get=lambda *args, **kwargs: None)
+            sys.modules["webview"] = None
+            sys.modules.pop("client", None)
+            client_module = importlib.import_module("client")
+
+            self.assertFalse(client_module.write_response_body(AbortedWriter(), b"{}"))
         finally:
             sys.modules.pop("client", None)
             if old_requests is None:
@@ -3215,6 +3420,12 @@ class MysqlConfigTest(unittest.TestCase):
                 "client/build_mac.sh",
             ):
                 self.assertTrue(Path(path).exists(), path)
+            example = json.loads(Path("client/node_config.example.json").read_text(encoding="utf-8"))
+            build_script = Path("client/build_exe.bat").read_text(encoding="utf-8")
+            self.assertIn("business_mode", example)
+            self.assertIn("pcdn_provider", example)
+            self.assertIn("dist\\node_config.json", build_script)
+            self.assertIn("dist\\.env", build_script)
             for path in ("client.py", "client_config.py", "client_console.py", "node_mac.py"):
                 self.assertFalse(Path(path).exists(), path)
         finally:

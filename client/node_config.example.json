@@ -5,5 +5,7 @@
   "reconnect_interval": 10,
   "manage_port": 8787,
   "storage_dir": "",
-  "storage_quota_gb": 0
+  "storage_quota_gb": 0,
+  "business_mode": "storage_share",
+  "pcdn_provider": "mock"
 }

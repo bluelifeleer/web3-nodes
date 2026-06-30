@@ -7,7 +7,7 @@ SUPPORTED_BUSINESS_MODES = {STORAGE_SHARE_MODE, PCDN_PARTNER_MODE}
 
 
 def normalize_business_mode(value=""):
-    raw = str(value or "").strip().lower().replace("-", "_")
+    raw = str(value or "").split("#", 1)[0].strip().lower().replace("-", "_")
     if raw in ("pcdn", "pcdn_partner", "partner_pcdn"):
         return PCDN_PARTNER_MODE
     if raw in SUPPORTED_BUSINESS_MODES:
@@ -16,7 +16,7 @@ def normalize_business_mode(value=""):
 
 
 def normalize_pcdn_provider(value=""):
-    raw = str(value or "").strip().lower().replace("_", "-")
+    raw = str(value or "").split("#", 1)[0].strip().lower().replace("_", "-")
     return raw or "mock"
 
 

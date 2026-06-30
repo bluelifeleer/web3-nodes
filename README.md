@@ -142,25 +142,29 @@ NODE_STORAGE_API_URL_TEMPLATE=http://127.0.0.1:{port}
 - `storage_share`：默认模式，保留当前加密文件上传、分片存储、分享链接、下载校验、IPFS 兜底和文件型节点收益。
 - `pcdn_partner`：第三方 PCDN 对接模式。当前第一阶段使用 `mock` 厂商适配器，本地即可验证 PCDN 任务、节点指标、结算收益和提现链路，不需要真实厂商凭证。
 
-启动 PCDN mock 模式：
+在根目录 `.env` 中启动 PCDN mock 模式：
+
+```env
+BUSINESS_MODE=pcdn_partner
+PCDN_PROVIDER=mock
+```
+
+然后重启服务端：
 
 ```powershell
-$env:BUSINESS_MODE="pcdn_partner"
-$env:PCDN_PROVIDER="mock"
 python .\server_main.py
 ```
 
-切回原文件存储分享模式：
+切回原文件存储分享模式时，把 `.env` 改为：
 
-```powershell
-$env:BUSINESS_MODE="storage_share"
-python .\server_main.py
+```env
+BUSINESS_MODE=storage_share
+PCDN_PROVIDER=mock
 ```
 
-客户端节点在 PCDN 模式下仍复用本地目录与容量上报能力，但页面语义会切换为缓存目录：
+客户端节点也会读取根目录 `.env`。在 PCDN 模式下仍复用本地目录与容量上报能力，但页面语义会切换为缓存目录：
 
 ```powershell
-$env:NODE_BUSINESS_MODE="pcdn_partner"
 python .\client\main.py --storage-dir=D:\pcdn-cache --storage_quota_gb=100
 ```
 
@@ -346,9 +350,13 @@ copy client\node_config.example.json node_config.json
   "reconnect_interval": 10,
   "manage_port": 8787,
   "storage_dir": "",
-  "storage_quota_gb": 0
+  "storage_quota_gb": 0,
+  "business_mode": "storage_share",
+  "pcdn_provider": "mock"
 }
 ```
+
+打包成 exe 后，客户端会按顺序查找配置：当前目录、exe 同目录、项目根目录。推荐把 `node_config.json` 或 `.env` 放在 exe 同目录；`client/build_exe.bat` 会自动把示例 `node_config.json` 复制到 `dist` 目录，若根目录已有 `.env` 也会复制一份到 `dist\.env`。
 
 首次作为真实存储节点使用时，必须指定存储目录和容量：
 

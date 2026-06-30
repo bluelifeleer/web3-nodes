@@ -34,6 +34,7 @@ from client.config import (
     get_storage_dir_arg,
     get_storage_quota_arg,
     load_client_config,
+    normalize_client_business_mode,
 )
 from client.console import CLIENT_MANAGE_HTML, render_client_console_html
 
@@ -47,6 +48,7 @@ NODE_STORAGE_DIR = ""
 MANAGE_PORT = 8787
 STORAGE_STORE_NAME = ".web3_nodes_store"
 STORAGE_LOCK_NAME = ".web3_nodes.lock"
+CLIENT_DISCONNECT_WINERRORS = {10053, 10054}
 
 
 def safe_print(message):
@@ -458,7 +460,7 @@ def select_storage_dir_for_shard(state, file_hash="", chunk_index=0):
     return entries[validate_chunk_index(chunk_index) % len(entries)]["storage_dir"]
 
 
-def create_client_state(server_url, user_addr, node_mac, storage_dir, manage_port, storage_quota_gb=0, storage_explicit=True, storage_dirs=None, business_mode="storage_share"):
+def create_client_state(server_url, user_addr, node_mac, storage_dir, manage_port, storage_quota_gb=0, storage_explicit=True, storage_dirs=None, business_mode="storage_share", pcdn_provider=""):
     normalized_dirs = normalize_storage_dirs(storage_dir, storage_quota_gb, storage_dirs)
     primary_dir = normalized_dirs[0]["storage_dir"] if normalized_dirs else storage_dir
     total_quota = round(sum(float(item.get("storage_quota_gb") or 0) for item in normalized_dirs), 2)
@@ -471,7 +473,8 @@ def create_client_state(server_url, user_addr, node_mac, storage_dir, manage_por
         "storage_explicit": storage_explicit,
         "storage_quota_gb": total_quota,
         "manage_port": manage_port,
-        "business_mode": business_mode or "storage_share",
+        "business_mode": normalize_client_business_mode(business_mode),
+        "pcdn_provider": str(pcdn_provider or "").strip(),
         "csrf_token": secrets.token_urlsafe(24),
         "running": True,
         "heartbeat_ok": False,
@@ -497,6 +500,7 @@ def client_status_payload(state):
         "storage_explicit": state.get("storage_explicit", True),
         "storage_quota_gb": state.get("storage_quota_gb", 0),
         "business_mode": state.get("business_mode", "storage_share"),
+        "pcdn_provider": state.get("pcdn_provider", ""),
         "storage": state["storage"],
         "stored_files": list_local_stored_files(state),
     }
@@ -528,6 +532,22 @@ def ensure_success_response(response):
     status_code = int(getattr(response, "status_code", 200) or 200)
     if status_code >= 400:
         raise RuntimeError(f"heartbeat failed with HTTP {status_code}")
+
+
+def sync_business_mode_from_response(state, response):
+    try:
+        payload = response.json()
+    except Exception:
+        return
+    if not isinstance(payload, dict):
+        return
+    data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+    mode = payload.get("business_mode") or data.get("business_mode")
+    provider = payload.get("pcdn_provider") or data.get("pcdn_provider")
+    if mode:
+        state["business_mode"] = normalize_client_business_mode(mode)
+    if provider:
+        state["pcdn_provider"] = str(provider).strip()
 
 
 def build_node_identity_payload(state):
@@ -835,6 +855,7 @@ def report_heartbeat(state, upload_bw, post_func=requests.post):
     try:
         response = post_func(f"{state['server_url']}/heartbeat", json=payload, timeout=10)
         ensure_success_response(response)
+        sync_business_mode_from_response(state, response)
         state["heartbeat_ok"] = True
         state["last_notice"] = ""
         state["last_heartbeat"] = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -844,6 +865,24 @@ def report_heartbeat(state, upload_bw, post_func=requests.post):
         state["heartbeat_ok"] = False
         state["last_error"] = str(exc)
         return False, payload
+
+
+def is_client_disconnect_error(exc):
+    if isinstance(exc, (BrokenPipeError, ConnectionAbortedError, ConnectionResetError)):
+        return True
+    if isinstance(exc, OSError):
+        return getattr(exc, "winerror", None) in CLIENT_DISCONNECT_WINERRORS
+    return False
+
+
+def write_response_body(writer, body):
+    try:
+        writer.write(body)
+        return True
+    except OSError as exc:
+        if is_client_disconnect_error(exc):
+            return False
+        raise
 
 
 def make_manage_handler(state):
@@ -956,7 +995,7 @@ def make_manage_handler(state):
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
-            self.wfile.write(body)
+            write_response_body(self.wfile, body)
 
         def _send_html(self, html):
             body = html.encode("utf-8")
@@ -964,7 +1003,7 @@ def make_manage_handler(state):
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
-            self.wfile.write(body)
+            write_response_body(self.wfile, body)
 
         def do_GET(self):
             if not self._validate_host():
@@ -1224,6 +1263,7 @@ def client_run():
     storage_explicit = bool(storage_dir_arg or config.get("storage_explicit"))
     storage_quota_gb = get_storage_quota_arg() or float(config.get("storage_quota_gb") or 0)
     business_mode = config.get("business_mode", "storage_share")
+    pcdn_provider = config.get("pcdn_provider", "")
     MANAGE_PORT = get_manage_port_arg() or int(config["manage_port"])
     if NODE_STORAGE_DIR:
         safe_print(f"📁 节点存储目录：{Path(NODE_STORAGE_DIR).expanduser()}")
@@ -1241,6 +1281,7 @@ def client_run():
         storage_quota_gb,
         storage_explicit,
         business_mode=business_mode,
+        pcdn_provider=pcdn_provider,
     )
     manage_server = None
     try:

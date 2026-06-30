@@ -104,7 +104,12 @@ def node_heartbeat():
             node_mac,
         ),
     )
-    return jsonify({"code": 200, "msg": "心跳上报成功"})
+    return jsonify({
+        "code": 200,
+        "msg": "心跳上报成功",
+        "business_mode": legacy.SERVER_CONFIG.business_mode,
+        "pcdn_provider": legacy.SERVER_CONFIG.pcdn_provider,
+    })
 
 
 @bp.route("/api/node_list", methods=["GET"])
